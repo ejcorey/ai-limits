@@ -62,21 +62,19 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.btnCodexSignIn).setOnClickListener {
             codexServer?.stop()
+            Prefs.clearCodexPending(this)
             val flow = CodexApi.beginLogin(this)
             codexServer = CodexLoginServer(applicationContext, flow) { err ->
                 runOnUiThread {
                     if (isFinishing || isDestroyed) return@runOnUiThread
-                    if (err == null) {
-                        toast("Codex signed in ✓")
-                        afterSetupChanged()
-                    } else {
+                    if (err != null) {
                         showError("Codex sign-in failed", RuntimeException(err))
-                        updateStatus()
                     }
+                    updateStatus()
                 }
             }.also { it.start() }
             openUrl(flow.url)
-            toast("Log in with your ChatGPT account, then return here")
+            toast("Log in with ChatGPT, then come back here to finish")
         }
 
         findViewById<Button>(R.id.btnCodexPaste).setOnClickListener {
@@ -103,9 +101,28 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnRefresh).setOnClickListener { refreshNowUi() }
     }
 
+    private var codexExchangeInFlight = false
+
     override fun onResume() {
         super.onResume()
         updateStatus()
+        // finish a Codex login whose code was caught while we were behind the browser
+        if (!codexExchangeInFlight && Prefs.codexPendingCode(this) != null) {
+            codexExchangeInFlight = true
+            scope.launch {
+                try {
+                    withContext(Dispatchers.IO) { CodexApi.completePendingLogin(this@MainActivity) }
+                    toast("Codex signed in ✓")
+                    afterSetupChanged()
+                } catch (e: Exception) {
+                    showError("Codex sign-in failed", e)
+                    updateStatus()
+                } finally {
+                    codexExchangeInFlight = false
+                }
+            }
+            return
+        }
         // if a login just completed while we were in the browser, show fresh numbers
         if (Prefs.claudeTokens(this).first != null || Prefs.codexTokens(this) != null) {
             val snap = UsageRepo.load(this)

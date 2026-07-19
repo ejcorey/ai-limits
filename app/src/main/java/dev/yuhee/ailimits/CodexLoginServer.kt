@@ -93,14 +93,12 @@ class CodexLoginServer(
             finish("State mismatch — try signing in again")
             return
         }
-        try {
-            CodexApi.exchangeCode(appCtx, code, flow.verifier)
-            respond(c, 200, page("Codex connected ✓", "You're signed in. Close this tab and return to AI Limits."))
-            finish(null)
-        } catch (e: Exception) {
-            respond(c, 200, page("Sign-in failed", e.message ?: "Token exchange failed. Try again from the app."))
-            finish(e.message ?: "Token exchange failed")
-        }
+        // Don't exchange here: with the browser in front this app is backgrounded and
+        // Samsung/Android may block its network (seen as "Unable to resolve host").
+        // Store the code; MainActivity.onResume completes the exchange in the foreground.
+        Prefs.setCodexPendingCode(appCtx, code)
+        respond(c, 200, page("Almost done ✓", "Sign-in caught. Return to AI Limits to finish."))
+        finish(null)
     }
 
     private fun parseQuery(path: String): Map<String, String> {

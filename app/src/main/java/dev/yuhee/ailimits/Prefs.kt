@@ -56,7 +56,7 @@ object Prefs {
     fun clearCodex(ctx: Context) {
         p(ctx).edit().remove("cx_access").remove("cx_refresh").remove("cx_id")
             .remove("cx_account").remove("cx_exp")
-            .remove("cx_verifier").remove("cx_state").apply()
+            .remove("cx_verifier").remove("cx_state").remove("cx_pending").apply()
     }
 
     // PKCE in-flight state (survives process death while browser is open)
@@ -66,6 +66,15 @@ object Prefs {
 
     fun codexFlow(ctx: Context): Pair<String?, String?> =
         Pair(p(ctx).getString("cx_verifier", null), p(ctx).getString("cx_state", null))
+
+    // Authorization code caught by the loopback server, waiting for a foreground exchange
+    // (Samsung blocks background network, so the exchange must happen once the app resumes).
+    fun setCodexPendingCode(ctx: Context, code: String) =
+        p(ctx).edit().putString("cx_pending", code).apply()
+
+    fun codexPendingCode(ctx: Context): String? = p(ctx).getString("cx_pending", null)
+
+    fun clearCodexPending(ctx: Context) = p(ctx).edit().remove("cx_pending").apply()
 
     // --- Last usage snapshot (JSON) ---
     fun snapshot(ctx: Context): String? = p(ctx).getString("snapshot", null)

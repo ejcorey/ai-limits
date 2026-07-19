@@ -51,6 +51,28 @@ object CodexApi {
     }
 
     /**
+     * Completes a sign-in whose code was caught by the loopback server.
+     * Returns false if nothing is pending. On an HTTP failure the code is spent,
+     * so it's dropped; on a network failure it's kept for the next resume.
+     */
+    fun completePendingLogin(ctx: Context): Boolean {
+        val code = Prefs.codexPendingCode(ctx) ?: return false
+        val (verifier, _) = Prefs.codexFlow(ctx)
+        if (verifier.isNullOrEmpty()) {
+            Prefs.clearCodexPending(ctx)
+            throw RuntimeException("Sign-in state was lost — tap Sign in again")
+        }
+        try {
+            exchangeCode(ctx, code, verifier)
+        } catch (e: RuntimeException) {
+            Prefs.clearCodexPending(ctx)
+            throw e
+        }
+        Prefs.clearCodexPending(ctx)
+        return true
+    }
+
+    /**
      * Fallback for when the loopback catch fails (e.g. Android killed the app while the
      * browser was open): the user pastes the localhost callback URL from the address bar.
      */
