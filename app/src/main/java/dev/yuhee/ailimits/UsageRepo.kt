@@ -94,6 +94,29 @@ object UsageRepo {
             .put("codex", providerJson(codex))
             .put("fetchedAt", snap.fetchedAt)
         Prefs.setSnapshot(ctx, j.toString())
+        appendHistory(ctx, claude, codex, snap.fetchedAt)
         return snap
+    }
+
+    /** History of short-window utilization: (timeMs, claudePct, codexPct), -1 = unknown. */
+    fun history(ctx: Context): List<Triple<Long, Int, Int>> {
+        val raw = Prefs.history(ctx) ?: return emptyList()
+        return try {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).map { i ->
+                val e = arr.getJSONArray(i)
+                Triple(e.getLong(0), e.getInt(1), e.getInt(2))
+            }
+        } catch (_: Exception) { emptyList() }
+    }
+
+    private fun appendHistory(ctx: Context, claude: ProviderState, codex: ProviderState, t: Long) {
+        fun pick(s: ProviderState): Int = s.windows.firstOrNull()?.pct ?: -1
+        val keep = history(ctx).filter { it.first >= t - 48 * 3600 * 1000L }.takeLast(199)
+        val arr = JSONArray()
+        (keep + Triple(t, pick(claude), pick(codex))).forEach { e ->
+            arr.put(JSONArray().put(e.first).put(e.second).put(e.third))
+        }
+        Prefs.setHistory(ctx, arr.toString())
     }
 }

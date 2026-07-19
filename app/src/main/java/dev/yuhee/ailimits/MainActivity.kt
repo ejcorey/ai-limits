@@ -7,8 +7,11 @@ import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
 import android.view.ViewGroup
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.Spinner
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
@@ -99,6 +102,22 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.btnRefresh).setOnClickListener { refreshNowUi() }
+
+        val spinner = findViewById<Spinner>(R.id.spinnerInterval)
+        val choices = listOf(15, 30, 60)
+        spinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, choices.map { "$it min" })
+        spinner.setSelection(choices.indexOf(Prefs.refreshMinutes(this)).coerceAtLeast(0))
+        spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: android.view.View?, pos: Int, id: Long) {
+                val m = choices[pos]
+                if (m != Prefs.refreshMinutes(this@MainActivity)) {
+                    Prefs.setRefreshMinutes(this@MainActivity, m)
+                    RefreshWorker.schedulePeriodic(this@MainActivity)
+                    toast("Auto-refresh every $m min")
+                }
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
     }
 
     private var codexExchangeInFlight = false
@@ -238,11 +257,12 @@ class MainActivity : AppCompatActivity() {
     private fun fmtReset(ms: Long): String {
         if (ms <= 0) return ""
         val diff = ms - System.currentTimeMillis()
-        if (diff <= 0) return "→ now"
-        return if (diff < 24 * 3600 * 1000L) {
-            "→ " + SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ms))
-        } else {
-            "→ " + SimpleDateFormat("EEE HH:mm", Locale.getDefault()).format(Date(ms))
+        if (diff <= 0) return "resets now"
+        val m = diff / 60000
+        return when {
+            m < 60 -> "in ${m}m"
+            m < 24 * 60 -> "in ${m / 60}h ${m % 60}m"
+            else -> "in ${m / (24 * 60)}d ${m % (24 * 60) / 60}h"
         }
     }
 

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- dark theme -->
+    <color name="bg">#141414</color>
+    <color name="card">#202020</color>
+    <color name="text">#ECEAE5</color>
+    <color name="text2">#9A9A9A</color>
+    <color name="track">#2E2E2E</color>
+    <color name="claude">#D97757</color>
+    <color name="codex">#19C37D</color>
+    <color name="red">#E5484D</color>
+    <color name="icon_bg">#171314</color>
+    <color name="widget_bg">#F2181818</color>
+    <color name="widget_stroke">#22FFFFFF</color>
+</resources>

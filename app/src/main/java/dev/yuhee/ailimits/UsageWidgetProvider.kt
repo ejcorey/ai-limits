@@ -5,7 +5,7 @@ import android.appwidget.AppWidgetProvider
 import android.content.Context
 import android.content.Intent
 
-class UsageWidgetProvider : AppWidgetProvider() {
+abstract class BaseWidgetProvider : AppWidgetProvider() {
 
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
         WidgetRenderer.updateAll(context)
@@ -19,8 +19,11 @@ class UsageWidgetProvider : AppWidgetProvider() {
     }
 
     override fun onDisabled(context: Context) {
-        RefreshWorker.cancelPeriodic(context)
+        if (!WidgetRenderer.anyWidgets(context)) RefreshWorker.cancelPeriodic(context)
     }
+}
+
+class UsageWidgetProvider : BaseWidgetProvider() {
 
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
@@ -34,3 +37,7 @@ class UsageWidgetProvider : AppWidgetProvider() {
         const val ACTION_MANUAL_REFRESH = "dev.yuhee.ailimits.ACTION_MANUAL_REFRESH"
     }
 }
+
+class BarsWidgetProvider : BaseWidgetProvider()
+class PercentWidgetProvider : BaseWidgetProvider()
+class GraphWidgetProvider : BaseWidgetProvider()

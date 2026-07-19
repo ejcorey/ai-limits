@@ -30,11 +30,12 @@ class RefreshWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ct
         private val NET = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
 
         fun schedulePeriodic(ctx: Context) {
-            val req = PeriodicWorkRequestBuilder<RefreshWorker>(30, TimeUnit.MINUTES)
+            val mins = Prefs.refreshMinutes(ctx).coerceAtLeast(15).toLong()
+            val req = PeriodicWorkRequestBuilder<RefreshWorker>(mins, TimeUnit.MINUTES)
                 .setConstraints(NET)
                 .build()
             WorkManager.getInstance(ctx)
-                .enqueueUniquePeriodicWork("ailimits-periodic", ExistingPeriodicWorkPolicy.KEEP, req)
+                .enqueueUniquePeriodicWork("ailimits-periodic", ExistingPeriodicWorkPolicy.UPDATE, req)
         }
 
         fun cancelPeriodic(ctx: Context) {

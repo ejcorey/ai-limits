@@ -4,7 +4,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
-        android:label="AI Limits"
+        android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.AIUsage"
         android:allowBackup="false"
@@ -22,6 +22,7 @@
 
         <receiver
             android:name=".UsageWidgetProvider"
+            android:label="Auspex · Detail"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
@@ -30,6 +31,42 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".BarsWidgetProvider"
+            android:label="Auspex · Slim"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info_bars" />
+        </receiver>
+
+        <receiver
+            android:name=".PercentWidgetProvider"
+            android:label="Auspex · Percent"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info_percent" />
+        </receiver>
+
+        <receiver
+            android:name=".GraphWidgetProvider"
+            android:label="Auspex · Graph 24h"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info_graph" />
         </receiver>
 
     </application>

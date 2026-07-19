@@ -79,6 +79,14 @@ object Prefs {
     // --- Last usage snapshot (JSON) ---
     fun snapshot(ctx: Context): String? = p(ctx).getString("snapshot", null)
     fun setSnapshot(ctx: Context, json: String) = p(ctx).edit().putString("snapshot", json).apply()
+
+    // --- Settings ---
+    fun refreshMinutes(ctx: Context): Int = p(ctx).getInt("refresh_min", 30)
+    fun setRefreshMinutes(ctx: Context, m: Int) = p(ctx).edit().putInt("refresh_min", m).apply()
+
+    // --- Usage history for the graph widget (JSON array of [t, claudePct, codexPct]) ---
+    fun history(ctx: Context): String? = p(ctx).getString("history", null)
+    fun setHistory(ctx: Context, json: String) = p(ctx).edit().putString("history", json).apply()
 }
 
 data class CodexTokens(
