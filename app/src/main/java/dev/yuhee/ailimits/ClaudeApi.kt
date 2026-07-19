@@ -16,7 +16,8 @@ import java.time.OffsetDateTime
 object ClaudeApi {
     private const val CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
     private const val REDIRECT = "https://console.anthropic.com/oauth/code/callback"
-    private const val TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
+    // Moved off console.anthropic.com ~2026-07: the old host now answers 429/404.
+    private const val TOKEN_URL = "https://api.anthropic.com/v1/oauth/token"
     private const val USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
     private const val SCOPE = "org:create_api_key user:profile user:inference"
     private const val UA = "claude-code/2.1.2"

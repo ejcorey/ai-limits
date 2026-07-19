@@ -55,8 +55,17 @@ object Prefs {
 
     fun clearCodex(ctx: Context) {
         p(ctx).edit().remove("cx_access").remove("cx_refresh").remove("cx_id")
-            .remove("cx_account").remove("cx_exp").apply()
+            .remove("cx_account").remove("cx_exp")
+            .remove("cx_verifier").remove("cx_state").apply()
     }
+
+    // PKCE in-flight state (survives process death while browser is open)
+    fun setCodexFlow(ctx: Context, verifier: String, state: String) {
+        p(ctx).edit().putString("cx_verifier", verifier).putString("cx_state", state).apply()
+    }
+
+    fun codexFlow(ctx: Context): Pair<String?, String?> =
+        Pair(p(ctx).getString("cx_verifier", null), p(ctx).getString("cx_state", null))
 
     // --- Last usage snapshot (JSON) ---
     fun snapshot(ctx: Context): String? = p(ctx).getString("snapshot", null)

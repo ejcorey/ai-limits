@@ -27,7 +27,9 @@ object CodexApi {
         Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
 
     /** Builds the authorize URL + PKCE material. Caller opens the URL and runs CodexLoginServer. */
-    fun beginLogin(): Flow {
+    fun beginLogin(ctx: Context): Flow = beginLogin().also { Prefs.setCodexFlow(ctx, it.verifier, it.state) }
+
+    private fun beginLogin(): Flow {
         val rnd = SecureRandom()
         val verifier = b64url(ByteArray(64).also { rnd.nextBytes(it) })
         val state = b64url(ByteArray(32).also { rnd.nextBytes(it) })
@@ -46,6 +48,28 @@ object CodexApi {
             "&state=${enc(state)}" +
             "&originator=codex_cli_rs"
         return Flow(verifier, state, url)
+    }
+
+    /**
+     * Fallback for when the loopback catch fails (e.g. Android killed the app while the
+     * browser was open): the user pastes the localhost callback URL from the address bar.
+     */
+    fun finishLoginManual(ctx: Context, pasted: String) {
+        val (verifier, storedState) = Prefs.codexFlow(ctx)
+        require(!verifier.isNullOrEmpty()) { "No sign-in in progress — tap “Sign in with ChatGPT” first" }
+        val text = pasted.trim()
+        val query = text.substringAfter('?', text)
+        val params = query.split('&').mapNotNull { kv ->
+            val i = kv.indexOf('=')
+            if (i <= 0) null else kv.substring(0, i) to java.net.URLDecoder.decode(kv.substring(i + 1), "UTF-8")
+        }.toMap()
+        val code = params["code"] ?: text.takeIf { !it.contains('/') && !it.contains('=') }
+        require(!code.isNullOrEmpty()) { "No code found — paste the full localhost URL from the browser's address bar" }
+        val state = params["state"]
+        require(state == null || storedState == null || state == storedState) {
+            "This link is from an older sign-in attempt — tap “Sign in with ChatGPT” and use the newest one"
+        }
+        exchangeCode(ctx, code, verifier)
     }
 
     /** Exchanges the authorization code for tokens and stores them. Throws with a readable message. */

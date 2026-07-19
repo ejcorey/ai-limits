@@ -62,7 +62,7 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.btnCodexSignIn).setOnClickListener {
             codexServer?.stop()
-            val flow = CodexApi.beginLogin()
+            val flow = CodexApi.beginLogin(this)
             codexServer = CodexLoginServer(applicationContext, flow) { err ->
                 runOnUiThread {
                     if (isFinishing || isDestroyed) return@runOnUiThread
@@ -77,6 +77,23 @@ class MainActivity : AppCompatActivity() {
             }.also { it.start() }
             openUrl(flow.url)
             toast("Log in with your ChatGPT account, then return here")
+        }
+
+        findViewById<Button>(R.id.btnCodexPaste).setOnClickListener {
+            promptText(
+                "Paste callback link",
+                "http://localhost:1455/auth/callback?code=…"
+            ) { text ->
+                scope.launch {
+                    try {
+                        withContext(Dispatchers.IO) { CodexApi.finishLoginManual(this@MainActivity, text) }
+                        toast("Codex signed in ✓")
+                        afterSetupChanged()
+                    } catch (e: Exception) {
+                        showError("Codex sign-in failed", e)
+                    }
+                }
+            }
         }
 
         findViewById<Button>(R.id.btnCodexSignOut).setOnClickListener {
