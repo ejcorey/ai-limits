@@ -23,6 +23,9 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
+private fun withAlpha(color: Int, alpha: Int): Int =
+    (color and 0x00FFFFFF) or ((alpha.coerceIn(0, 255)) shl 24)
+
 private fun blend(a: Int, b: Int, k: Float): Int {
     val f = k.coerceIn(0f, 1f)
     return Color.argb(
@@ -40,6 +43,25 @@ private fun blend(a: Int, b: Int, k: Float): Int {
  * widget instance lay itself out against the size the launcher actually gave it.
  */
 object WidgetRenderer {
+
+    /** The user's display choices, resolved once per update so tests can vary them freely. */
+    data class Opts(
+        val showClaude: Boolean = true,
+        val showCodex: Boolean = true,
+        val opacity: Int = 100,
+        val projection: Boolean = true,
+        val sparkline: Boolean = true,
+    ) {
+        val solo: Boolean get() = showClaude != showCodex
+    }
+
+    fun optsFrom(ctx: Context) = Opts(
+        showClaude = Settings.showClaude(ctx),
+        showCodex = Settings.showCodex(ctx),
+        opacity = Settings.opacity(ctx),
+        projection = Settings.showProjection(ctx),
+        sparkline = Settings.showSparkline(ctx),
+    )
 
     // -- tiers -------------------------------------------------------------
     // Declared heights so the layout can guarantee a fit before it draws.
@@ -63,6 +85,18 @@ object WidgetRenderer {
 
     private fun padFor(tier: Int) = if (tier == MEDIUM) 11f else 13f
 
+    /** Height a tier needs for [panels] providers, padding and gap included. */
+    internal fun neededHeight(tier: Int, panels: Int) =
+        padFor(tier) * 2 + blockH(tier) * panels + MIN_GAP
+
+    /** The richest layout that genuinely fits, or [COMPACT] when none does. */
+    internal fun tierFor(h: Float, panels: Int): Int {
+        for (candidate in intArrayOf(RICH, FULL, MEDIUM)) {
+            if (neededHeight(candidate, panels) <= h) return candidate
+        }
+        return COMPACT
+    }
+
     private val providers = listOf(
         UsageWidgetProvider::class.java,
         BarsWidgetProvider::class.java,
@@ -79,12 +113,14 @@ object WidgetRenderer {
         val mgr = AppWidgetManager.getInstance(ctx)
         val snap = UsageRepo.load(ctx)
         val hist = UsageRepo.history(ctx)
-        val theme = Theme(ctx)
+        // Colours are resolved against the chosen theme, not necessarily the system one.
+        val theme = Theme(Settings.themedContext(ctx))
+        val opts = optsFrom(ctx)
         // Sizes differ per instance, so each widget is rendered on its own.
         providers.forEach { cls ->
             ids(ctx, cls).forEach { id ->
                 runCatching {
-                    mgr.updateAppWidget(id, build(ctx, mgr, id, cls, snap, hist, theme, refreshing))
+                    mgr.updateAppWidget(id, build(ctx, mgr, id, cls, snap, hist, theme, opts, refreshing))
                 }
             }
         }
@@ -98,12 +134,13 @@ object WidgetRenderer {
         snap: Snapshot,
         hist: List<Triple<Long, Int, Int>>,
         t: Theme,
+        o: Opts,
         refreshing: Boolean,
     ): RemoteViews {
-        val opts = mgr.getAppWidgetOptions(id)
-        val wDp = opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0)
+        val box = mgr.getAppWidgetOptions(id)
+        val wDp = box.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0)
             .takeIf { it > 0 }?.toFloat() ?: 250f
-        val hDp = opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0)
+        val hDp = box.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0)
             .takeIf { it > 0 }?.toFloat() ?: 120f
 
         val style = when (cls) {
@@ -112,7 +149,7 @@ object WidgetRenderer {
             GraphWidgetProvider::class.java -> Style.GRAPH
             else -> Style.DETAIL
         }
-        val (bmp, footer) = render(ctx, style, wDp, hDp, snap, hist, refreshing, t)
+        val (bmp, footer) = render(ctx, style, wDp, hDp, snap, hist, refreshing, t, o)
 
         val rv = RemoteViews(ctx.packageName, R.layout.widget_canvas)
         rv.setImageViewBitmap(R.id.widget_canvas, bmp)
@@ -140,8 +177,9 @@ object WidgetRenderer {
         hist: List<Triple<Long, Int, Int>>,
         refreshing: Boolean = false,
         theme: Theme? = null,
+        o: Opts = Opts(),
     ): Pair<Bitmap, Boolean> {
-        val t = theme ?: Theme(ctx)
+        val t = theme ?: Theme(Settings.themedContext(ctx))
         val scale = scaleFor(ctx, wDp, hDp)
         val bmp = Bitmap.createBitmap(
             max(1, (wDp * scale).roundToInt()),
@@ -154,13 +192,28 @@ object WidgetRenderer {
 
         var footer = false
         when (style) {
-            Style.BARS -> drawBars(pen, wDp, hDp, snap, t)
-            Style.RINGS -> drawRings(pen, wDp, hDp, snap, t)
-            Style.GRAPH -> drawGraph(pen, wDp, hDp, snap, hist, t)
-            Style.DETAIL -> footer = drawDetail(pen, wDp, hDp, snap, hist, t, refreshing)
+            Style.BARS -> drawBars(pen, wDp, hDp, snap, t, o)
+            Style.RINGS -> drawRings(pen, wDp, hDp, snap, t, o)
+            Style.GRAPH -> drawGraph(pen, wDp, hDp, snap, hist, t, o)
+            Style.DETAIL -> footer = drawDetail(pen, wDp, hDp, snap, hist, t, o, refreshing)
         }
         return bmp to footer
     }
+
+    /** The providers the user wants, paired with their history series. */
+    private fun visible(
+        snap: Snapshot, hist: List<Triple<Long, Int, Int>>, t: Theme, o: Opts,
+    ): List<Panel> = buildList {
+        if (o.showClaude) add(Panel(snap.claude, "Claude", t.claude, hist.map { it.first to it.second }))
+        if (o.showCodex) add(Panel(snap.codex, "Codex", t.codex, hist.map { it.first to it.third }))
+    }
+
+    private class Panel(
+        val state: ProviderState,
+        val name: String,
+        val color: Int,
+        val series: List<Pair<Long, Int>>,
+    )
 
     /** Keeps the bitmap crisp but well under the memory a RemoteViews update may carry. */
     private fun scaleFor(ctx: Context, wDp: Float, hDp: Float): Float {
@@ -193,46 +246,146 @@ object WidgetRenderer {
     /** @return true when the footer (and therefore its tap region) was drawn. */
     private fun drawDetail(
         g: Pen, w: Float, h: Float, snap: Snapshot,
-        hist: List<Triple<Long, Int, Int>>, t: Theme, refreshing: Boolean,
+        hist: List<Triple<Long, Int, Int>>, t: Theme, o: Opts, refreshing: Boolean,
     ): Boolean {
-        g.card(w, h)
-        var tier = COMPACT
-        for (candidate in intArrayOf(RICH, FULL, MEDIUM)) {
-            if (padFor(candidate) * 2 + blockH(candidate) * 2 + MIN_GAP <= h) { tier = candidate; break }
-        }
-        if (tier == COMPACT) { drawCompact(g, w, h, snap, t); return false }
+        g.card(w, h, o.opacity)
+        val panels = visible(snap, hist, t, o)
+        if (panels.size == 1) return drawSolo(g, w, h, panels[0], t, o, snap, refreshing)
+
+        val n = panels.size
+        val tier = tierFor(h, n)
+        if (tier == COMPACT) { drawCompact(g, w, h, panels, t); return false }
 
         val pad = padFor(tier)
         val x = pad
         val cw = w - pad * 2
         val bh = blockH(tier)
-        val slack = h - pad * 2 - bh * 2
+        val slack = h - pad * 2 - bh * n
         val foot = slack >= MIN_GAP + FOOT
-        val gap = min(24f, slack - if (foot) FOOT else 0f)
-        val y = pad + if (foot) 0f else max(0f, (slack - gap) / 2f)
 
-        drawBlock(g, x, y, cw, snap.claude, "Claude", t.claude, t, tier, hist.map { it.first to it.second })
-        g.line(x, y + bh + gap / 2f, cw, t.rule)
-        drawBlock(g, x, y + bh + gap, cw, snap.codex, "Codex", t.codex, t, tier, hist.map { it.first to it.third })
+        // Spend leftover height on the chart rather than leaving a dead zone:
+        // a widget dragged tall should show more, not the same thing with a gap.
+        var free = slack - if (foot) FOOT else 0f
+        val gap = min(24f, max(MIN_GAP, free / max(1, n)))
+        free -= gap * (n - 1)
+        val stretch =
+            if (tier == RICH && o.sparkline) min(90f, max(0f, free / n - 4f)) else 0f
+        val bhEff = bh + stretch
+        val used = bhEff * n + gap * (n - 1)
+        val y = pad + if (foot) 0f else max(0f, (h - pad * 2 - used) / 2f)
 
-        if (foot) {
-            val fy = h - pad - 1f
-            g.refreshIcon(x + 4f, fy - 4.5f, 4f, t.faint)
-            val stamp = if (refreshing) "updating…"
-            else if (snap.fetchedAt > 0) "updated " + clock(snap.fetchedAt) else "not updated yet"
-            g.text(stamp, x + 12f, fy - 1f, 9f, 500, t.faint)
-            g.text("Open app", x + cw, fy - 1f, 9f, 500, t.faint, Paint.Align.RIGHT)
-        } else if (snap.fetchedAt > 0 && System.currentTimeMillis() - snap.fetchedAt > 60 * 60_000L) {
-            // No room to spell out the timestamp — flag it only when it actually matters.
+        panels.forEachIndexed { i, p ->
+            val by = y + i * (bhEff + gap)
+            if (i > 0) g.line(x, by - gap / 2f, cw, t.rule)
+            drawBlock(g, x, by, cw, p, t, o, tier, stretch)
+        }
+
+        if (foot) footer(g, x, cw, h - pad - 1f, t, snap, refreshing)
+        else staleDot(g, w, t, snap)
+        return foot
+    }
+
+    private fun footer(
+        g: Pen, x: Float, cw: Float, fy: Float, t: Theme, snap: Snapshot, refreshing: Boolean,
+    ) {
+        g.refreshIcon(x + 4f, fy - 4.5f, 4f, t.faint)
+        val stamp = if (refreshing) "updating…"
+        else if (snap.fetchedAt > 0) "updated " + clock(snap.fetchedAt) else "not updated yet"
+        g.text(stamp, x + 12f, fy - 1f, 9f, 500, t.faint)
+        g.text("Open app", x + cw, fy - 1f, 9f, 500, t.faint, Paint.Align.RIGHT)
+    }
+
+    private fun staleDot(g: Pen, w: Float, t: Theme, snap: Snapshot) {
+        // No room to spell out the timestamp — flag it only when it actually matters.
+        if (snap.fetchedAt > 0 && System.currentTimeMillis() - snap.fetchedAt > 60 * 60_000L) {
             g.circle(w - 11f, 11f, 2.6f, t.warn)
         }
+    }
+
+    /**
+     * One provider on its own. With the whole widget to itself there is room to
+     * give every window a full row instead of squeezing them into chips.
+     */
+    private fun drawSolo(
+        g: Pen, w: Float, h: Float, p: Panel, t: Theme, o: Opts,
+        snap: Snapshot, refreshing: Boolean,
+    ): Boolean {
+        val pad = 14f
+        val x = pad
+        val cw = w - pad * 2
+        val b = binding(p.state)
+
+        g.circle(x + 4f, pad + 6f, 4f, if (p.state.configured) p.color else t.faint)
+        var cx = x + 13f
+        cx += g.text(p.name, cx, pad + 10.5f, 13f, 700, if (p.state.configured) p.color else t.dim, tracking = .035f) + 7f
+        val plan = if (p.state.configured) prettyPlan(p.state.plan) else null
+        if (plan != null) cx += g.chip(plan, cx, pad - 1f, p.color) + 7f
+
+        if (b == null) {
+            val msg = when {
+                !p.state.configured -> "Tap to sign in"
+                p.state.error != null -> shortError(p.state.error)
+                else -> "No data yet"
+            }
+            g.text(msg, x, pad + 38f, 13f, 500, if (p.state.error != null) t.warn else t.dim)
+            return false
+        }
+
+        val sc = t.status(b.pct, p.color)
+        val proj = if (o.projection) projection(b, p.series) else null
+        val head = if (proj != null) "on pace to cap " + clock(proj)
+        else "resets " + clock(b.resetsAt) + " · " + left(b.resetsAt) + " left"
+        if (g.measure(head, 10f, 500) <= x + cw - cx) {
+            g.text(head, x + cw, pad + 10.5f, 10f, if (proj != null) 600 else 500,
+                if (proj != null) t.warn else t.faint, Paint.Align.RIGHT)
+        }
+
+        // Hero, sized up now that it is not sharing the widget — but kept modest on
+        // short widgets so the window rows still get a look in.
+        val tight = h < 132f
+        val hy = pad + if (tight) 14f else 18f
+        val heroSize = if (tight) 29f else 35f
+        val nw = g.text("${b.pct}", x, hy + heroSize * .77f, heroSize, 700, sc, tracking = -.017f)
+        g.text("%", x + nw + 3f, hy + heroSize * .77f, heroSize * .43f, 700, sc)
+        val bx = x + nw + if (tight) 22f else 26f
+        g.bar(bx, hy + heroSize * .31f, x + cw - bx, if (tight) 10f else 12f, b.pct, sc)
+        g.text(windowName(b.label), x, hy + heroSize * .77f + 15f, 10f, 500, t.dim, tracking = .02f)
+
+        // Every other window gets a real row.
+        val rest = p.state.windows.filter { it !== b }
+        var ry = hy + heroSize * .77f + if (tight) 22f else 25f
+        rest.forEach { v ->
+            if (ry + 13f > h - pad) return@forEach
+            g.text(v.label, x, ry + 8f, 9.5f, 600, t.dim, tracking = .02f)
+            val lx = x + 46f
+            val rw = max(20f, cw - 46f - 92f)
+            g.bar(lx, ry + 3f, rw, 6f, v.pct, t.status(v.pct, p.color))
+            g.text("${v.pct}%", lx + rw + 34f, ry + 8f, 10f, 700, t.text, Paint.Align.RIGHT)
+            g.text(left(v.resetsAt), x + cw, ry + 8f, 9f, 500, t.faint, Paint.Align.RIGHT)
+            ry += 15f
+        }
+
+        // Whatever the rows left over is spent in order: footer first (it is the
+        // cheapest), then the sparkline gets the rest, and neither is drawn unless
+        // it genuinely fits. Reserving space up front is what caused overlaps.
+        val remaining = h - pad - ry
+        val foot = remaining >= 20f
+        val forSpark = remaining - if (foot) 16f else 0f
+        if (o.sparkline && forSpark >= 24f) {
+            sparkline(g, x, ry + 3f, cw, forSpark - 7f, p.series, p.color, t)
+        }
+        if (foot) footer(g, x, cw, h - pad - 1f, t, snap, refreshing) else staleDot(g, w, t, snap)
         return foot
     }
 
     private fun drawBlock(
-        g: Pen, x: Float, y: Float, w: Float, st: ProviderState, name: String,
-        color: Int, t: Theme, tier: Int, series: List<Pair<Long, Int>>,
+        g: Pen, x: Float, y: Float, w: Float, p: Panel, t: Theme, o: Opts, tier: Int,
+        stretch: Float = 0f,
     ) {
+        val st = p.state
+        val name = p.name
+        val color = p.color
+        val series = p.series
         val med = tier == MEDIUM
         val b = binding(st)
 
@@ -254,7 +407,7 @@ object WidgetRenderer {
         }
 
         val sc = t.status(b.pct, color)
-        val proj = projection(b, series)
+        val proj = if (o.projection) projection(b, series) else null
         val head = if (proj != null) "on pace to cap " + clock(proj)
         else "resets " + clock(b.resetsAt) + " · " + left(b.resetsAt) + " left"
         val headWeight = if (proj != null) 600 else 500
@@ -295,7 +448,9 @@ object WidgetRenderer {
             drawSecondary(g, x + w, my + 8f, room, st.windows.filter { it !== b }, color, t)
         }
 
-        if (tier == RICH) sparkline(g, x, y + H_FULL + 2f, w, SPARK - 6f, series, color, t)
+        if (tier == RICH && o.sparkline) {
+            sparkline(g, x, y + H_FULL + 2f, w, SPARK - 6f + stretch, series, color, t)
+        }
     }
 
     /** Right-aligned group of the non-binding windows; degrades until it fits. */
@@ -327,26 +482,39 @@ object WidgetRenderer {
         }
     }
 
-    /** Compact: both providers side by side, one glance each. */
-    private fun drawCompact(g: Pen, w: Float, h: Float, snap: Snapshot, t: Theme) {
+    /** Compact: providers side by side, one glance each. */
+    private fun drawCompact(g: Pen, w: Float, h: Float, panels: List<Panel>, t: Theme) {
         val pad = 13f
-        val colW = (w - pad * 2 - 16f) / 2f
-        listOf(
-            Triple(snap.claude, "Claude", t.claude),
-            Triple(snap.codex, "Codex", t.codex),
-        ).forEachIndexed { i, (st, name, color) ->
-            val x = pad + i * (colW + 16f)
-            val b = binding(st)
-            val sc = if (b != null) t.status(b.pct, color) else t.faint
+        val gap = 16f
+        val n = max(1, panels.size)
+        val colW = (w - pad * 2 - gap * (n - 1)) / n
+        // Below this there is no room for a name and a number on the same line.
+        val roomy = colW >= 92f
+        val single = h >= 56f
+
+        panels.forEachIndexed { i, p ->
+            val x = pad + i * (colW + gap)
+            val b = binding(p.state)
+            val sc = if (b != null) t.status(b.pct, p.color) else t.faint
             val cy = h / 2f
-            g.circle(x + 3.5f, cy - 10f, 3.5f, if (st.configured) color else t.faint)
-            g.text(name, x + 12f, cy - 6.5f, 10f, 700, if (st.configured) color else t.dim, tracking = .03f)
-            g.text(if (b != null) "${b.pct}%" else "--", x + colW, cy - 6.5f, 12.5f, 700, sc, Paint.Align.RIGHT)
+            val nameColor = if (p.state.configured) p.color else t.dim
+            if (roomy) {
+                g.circle(x + 3.5f, cy - 10f, 3.5f, if (p.state.configured) p.color else t.faint)
+                g.text(p.name, x + 12f, cy - 6.5f, 10f, 700, nameColor, tracking = .03f)
+                g.text(if (b != null) "${b.pct}%" else "--", x + colW, cy - 6.5f, 12.5f, 700, sc, Paint.Align.RIGHT)
+            } else {
+                // Too narrow for both: the number is what matters, keep only a colour cue.
+                g.circle(x + 3.5f, cy - 9f, 3.5f, if (p.state.configured) p.color else t.faint)
+                g.text(if (b != null) "${b.pct}%" else "--", x + colW, cy - 5.5f, 12f, 700, sc, Paint.Align.RIGHT)
+            }
             g.bar(x, cy, colW, 8f, b?.pct ?: 0, sc)
-            g.text(
-                if (b != null) shortWindow(b.label) + " · " + left(b.resetsAt) + " left" else "tap to sign in",
-                x, cy + 18f, 8.5f, 500, t.faint
-            )
+            if (single) {
+                val sub = if (b != null) {
+                    val full = shortWindow(b.label) + " · " + left(b.resetsAt) + " left"
+                    if (g.measure(full, 8.5f, 500) <= colW) full else left(b.resetsAt) + " left"
+                } else "tap to sign in"
+                g.text(sub, x, cy + 18f, 8.5f, 500, t.faint)
+            }
         }
     }
 
@@ -385,15 +553,23 @@ object WidgetRenderer {
 
     // --- rings ------------------------------------------------------------
 
-    private fun drawRings(g: Pen, w: Float, h: Float, snap: Snapshot, t: Theme) {
-        g.card(w, h)
-        val r = min((w / 2f - 34f) / 2f, (h - 52f) / 2f).coerceAtLeast(12f)
-        listOf(
-            Triple(snap.claude, "CLAUDE", t.claude),
-            Triple(snap.codex, "CODEX", t.codex),
-        ).forEachIndexed { i, (st, name, color) ->
-            val cx = w * (if (i == 1) .73f else .27f)
-            val cy = (h - 26f) / 2f + 4f
+    private fun drawRings(g: Pen, w: Float, h: Float, snap: Snapshot, t: Theme, o: Opts) {
+        g.card(w, h, o.opacity)
+        val panels = visible(snap, hist = emptyList(), t = t, o = o)
+        val n = max(1, panels.size)
+        // Squeezed short, the caption is the first thing to go — a clipped label
+        // below the dial is worse than no label at all.
+        val showLabel = h >= 84f
+        val showSub = h >= 100f
+        val bottom = if (showSub) 26f else if (showLabel) 15f else 0f
+        // One ring gets the whole card, so it can be much larger.
+        val r = min((w / n - 34f) / 2f, (h - bottom - 14f) / 2f).coerceAtLeast(10f)
+        panels.forEachIndexed { i, p ->
+            val cx = if (n == 1) w / 2f else w * (if (i == 1) .73f else .27f)
+            val cy = (h - bottom) / 2f + 2f
+            val st = p.state
+            val name = p.name.uppercase()
+            val color = p.color
             val b = binding(st)
             val th = max(5f, r * .26f)
             g.arc(cx, cy, r, 135f, 270f, t.track, th)
@@ -408,34 +584,51 @@ object WidgetRenderer {
             val c = if (b != null) t.status(b.pct, color) else t.faint
             g.text(label, cx - off, cy + ns * .34f, ns, 700, c, tracking = -.017f)
             if (b != null) g.text("%", cx - off + nw + 1.5f, cy + ns * .34f, r * .26f, 700, c)
-            g.text(name, cx, cy + r + 11f, 9f, 700, t.dim, Paint.Align.CENTER, .05f)
-            g.text(
-                if (b != null) left(b.resetsAt) + " left" else "tap to sign in",
-                cx, cy + r + 22f, 8.5f, 500, t.faint, Paint.Align.CENTER
-            )
+            if (showLabel) g.text(name, cx, cy + r + 11f, 9f, 700, t.dim, Paint.Align.CENTER, .05f)
+            if (showSub) {
+                g.text(
+                    if (b != null) left(b.resetsAt) + " left" else "tap to sign in",
+                    cx, cy + r + 22f, 8.5f, 500, t.faint, Paint.Align.CENTER
+                )
+            }
         }
     }
 
     // --- slim bars --------------------------------------------------------
 
-    private fun drawBars(g: Pen, w: Float, h: Float, snap: Snapshot, t: Theme) {
-        g.card(w, h)
+    private fun drawBars(g: Pen, w: Float, h: Float, snap: Snapshot, t: Theme, o: Opts) {
+        g.card(w, h, o.opacity)
         val pad = 14f
         val cw = w - pad * 2
-        listOf(
-            Triple(snap.claude, "Claude", t.claude),
-            Triple(snap.codex, "Codex", t.codex),
-        ).forEachIndexed { i, (st, name, color) ->
-            val y = h / 2f - 18f + i * 23f
-            val b = binding(st)
-            val sc = if (b != null) t.status(b.pct, color) else t.faint
-            g.circle(pad + 3f, y + 5f, 3f, if (st.configured) color else t.faint)
-            g.text(name, pad + 11f, y + 8.5f, 9.5f, 700, if (st.configured) color else t.dim, tracking = .03f)
-            val lx = pad + 54f
-            val rw = max(20f, cw - 54f - 74f)
-            g.bar(lx, y + 2f, rw, 8f, b?.pct ?: 0, sc)
-            g.text(if (b != null) "${b.pct}%" else "--", lx + rw + 32f, y + 8.5f, 11f, 700, t.text, Paint.Align.RIGHT)
-            g.text(if (b != null) left(b.resetsAt) else "—", pad + cw, y + 8.5f, 8.5f, 500, t.faint, Paint.Align.RIGHT)
+        val panels = visible(snap, hist = emptyList(), t = t, o = o)
+        val rowH = 23f
+        val top = h / 2f - rowH * panels.size / 2f + 1f
+
+        // Columns are budgeted from the width actually available rather than fixed
+        // offsets, which used to go negative and push text past the right edge.
+        val nameW = min(56f, max(0f, cw * .26f))
+        val showName = nameW >= 40f
+        val pctW = min(40f, cw * .18f)
+        val resetW = if (cw >= 210f) min(52f, cw * .2f) else 0f
+        val barX = pad + if (showName) nameW else 12f
+        val barW = max(16f, pad + cw - resetW - pctW - 6f - barX)
+
+        panels.forEachIndexed { i, p ->
+            val y = top + i * rowH
+            val b = binding(p.state)
+            val sc = if (b != null) t.status(b.pct, p.color) else t.faint
+            g.circle(pad + 3f, y + 5f, 3f, if (p.state.configured) p.color else t.faint)
+            if (showName) {
+                g.text(p.name, pad + 11f, y + 8.5f, 9.5f, 700,
+                    if (p.state.configured) p.color else t.dim, tracking = .03f)
+            }
+            g.bar(barX, y + 2f, barW, 8f, b?.pct ?: 0, sc)
+            g.text(if (b != null) "${b.pct}%" else "--", barX + barW + pctW, y + 8.5f, 11f, 700,
+                t.text, Paint.Align.RIGHT)
+            if (resetW > 0f) {
+                g.text(if (b != null) left(b.resetsAt) else "—", pad + cw, y + 8.5f, 8.5f, 500,
+                    t.faint, Paint.Align.RIGHT)
+            }
         }
     }
 
@@ -443,46 +636,57 @@ object WidgetRenderer {
 
     private fun drawGraph(
         g: Pen, w: Float, h: Float, snap: Snapshot,
-        hist: List<Triple<Long, Int, Int>>, t: Theme,
+        hist: List<Triple<Long, Int, Int>>, t: Theme, o: Opts,
     ) {
-        g.card(w, h)
-        val padL = 14f; val padR = 32f; val padT = 27f; val padB = 17f
+        g.card(w, h, o.opacity)
+        val panels = visible(snap, hist, t, o)
+        // Short or narrow, the chrome is dropped in order of expendability so the
+        // plot itself always keeps a usable area instead of collapsing to a sliver.
+        val showHeader = h >= 92f
+        val showXAxis = h >= 84f
+        val showYAxis = w >= 200f
+        val padL = 14f
+        val padR = if (showYAxis) 32f else 12f
+        val padT = if (showHeader) 27f else 12f
+        val padB = if (showXAxis) 17f else 10f
         val gx = padL; val gy = padT
         val gw = max(20f, w - padL - padR)
-        val gh = max(20f, h - padT - padB)
+        val gh = max(16f, h - padT - padB)
         val now = System.currentTimeMillis()
         val span = 24 * 3600_000L
         val t0 = now - span
 
-        g.text("Last 24 hours", padL, 17f, 10f, 700, t.text, tracking = .03f)
-        var lx = w - padR
-        listOf(Triple(t.codex, "Codex", snap.codex), Triple(t.claude, "Claude", snap.claude))
-            .forEach { (c, n, st) ->
-                val b = binding(st)
-                val s = if (b != null) "$n ${b.pct}%" else n
+        if (showHeader) {
+            g.text("Last 24 hours", padL, 17f, 10f, 700, t.text, tracking = .03f)
+            var lx = w - padR
+            panels.reversed().forEach { p ->
+                val b = binding(p.state)
+                val c = p.color
+                val s = if (b != null) "${p.name} ${b.pct}%" else p.name
                 val tw = g.measure(s, 9f, 600, .02f)
                 g.text(s, lx, 17f, 9f, 600, c, Paint.Align.RIGHT, .02f)
                 g.circle(lx - tw - 7f, 13.5f, 2.6f, c)
                 lx -= tw + 17f
             }
+        }
 
         intArrayOf(0, 50, 100).forEach { v ->
             val y = gy + (100 - v) / 100f * gh
             g.line(gx, y, gw, t.rule)
-            g.text("$v%", gx + gw + 5f, y + 3.2f, 8.5f, 500, t.faint)
+            if (showYAxis) g.text("$v%", gx + gw + 5f, y + 3.2f, 8.5f, 500, t.faint)
         }
-        g.text("24h ago", gx, h - 6f, 8.5f, 500, t.faint)
-        g.text("12h", gx + gw / 2f, h - 6f, 8.5f, 500, t.faint, Paint.Align.CENTER)
-        g.text("now", gx + gw, h - 6f, 8.5f, 500, t.faint, Paint.Align.RIGHT)
+        if (showXAxis) {
+            g.text("24h ago", gx, h - 6f, 8.5f, 500, t.faint)
+            g.text("12h", gx + gw / 2f, h - 6f, 8.5f, 500, t.faint, Paint.Align.CENTER)
+            g.text("now", gx + gw, h - 6f, 8.5f, 500, t.faint, Paint.Align.RIGHT)
+        }
 
         fun px(ms: Long) = gx + (ms - t0).toFloat() / span * gw
         fun py(v: Int) = gy + (100 - v.coerceIn(0, 100)) / 100f * gh
 
         // Taller series first so the shorter one stays visible on top.
-        val series = listOf(
-            t.claude to hist.map { it.first to it.second },
-            t.codex to hist.map { it.first to it.third },
-        ).map { (c, pts) -> c to pts.filter { it.first >= t0 && it.second >= 0 } }
+        val series = panels
+            .map { p -> p.color to p.series.filter { it.first >= t0 && it.second >= 0 } }
             .filter { it.second.size >= 2 }
             .sortedByDescending { it.second.last().second }
 
@@ -514,13 +718,13 @@ object WidgetRenderer {
     // --- data helpers -----------------------------------------------------
 
     /** The binding constraint: the fullest window is what actually limits you. */
-    private fun binding(state: ProviderState): Win? = state.windows.maxByOrNull { it.pct }
+    internal fun binding(state: ProviderState): Win? = state.windows.maxByOrNull { it.pct }
 
     /**
      * Linear burn over recent history projected forward to 100%. Null unless the
      * window would realistically cap before it resets.
      */
-    private fun projection(b: Win, series: List<Pair<Long, Int>>): Long? {
+    internal fun projection(b: Win, series: List<Pair<Long, Int>>): Long? {
         val now = System.currentTimeMillis()
         val pts = series.filter { it.first >= now - 110 * 60_000L && it.second >= 0 }
         if (pts.size < 3) return null
@@ -568,11 +772,11 @@ object WidgetRenderer {
     private fun shortWindow(label: String) = windowName(label).removeSuffix(" window")
 
     /** "plus" -> "Plus", "chatgpt_pro" -> "ChatGPT Pro". */
-    private fun prettyPlan(plan: String?): String? {
+    internal fun prettyPlan(plan: String?): String? {
         val p = plan?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         return p.split('_', '-', ' ').filter { it.isNotEmpty() }.joinToString(" ") { word ->
             if (word.equals("chatgpt", true)) "ChatGPT"
-            else word.replaceFirstChar { it.uppercase() }
+            else word.lowercase().replaceFirstChar { it.uppercase() }
         }
     }
 
@@ -652,12 +856,13 @@ object WidgetRenderer {
             p.shader = null
         }
 
-        fun card(w: Float, h: Float) {
-            rrect(0f, 0f, w, h, 22f, t.bg)
+        fun card(w: Float, h: Float, opacityPct: Int = 100) {
+            val a = (opacityPct.coerceIn(0, 100) * 255 / 100)
+            rrect(0f, 0f, w, h, 22f, withAlpha(t.bg, a))
             r.set(.5f, .5f, w - .5f, h - .5f)
             p.style = Paint.Style.STROKE
             p.strokeWidth = 1f
-            p.color = t.stroke
+            p.color = withAlpha(t.stroke, Color.alpha(t.stroke) * a / 255)
             p.shader = null
             c.drawRoundRect(r, 21.5f, 21.5f, p)
             p.style = Paint.Style.FILL

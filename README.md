@@ -28,7 +28,19 @@ Four styles, all drawn on a canvas so they scale properly instead of clipping:
 | **Rings** | 3×2 | Two dial gauges, the tightest limit per provider |
 | **History** | 4×3 | 24-hour chart of both providers with axes and a legend |
 
-**Detail** re-lays itself out for the size you drag it to — from a two-column glance at 4×1, through a bar-per-provider at 4×2, to the full hero layout with per-provider 12-hour sparklines and a footer when it is tall enough.
+**Detail** re-lays itself out for the size you drag it to — from a two-column glance at 4×1, through a bar-per-provider at 4×2, to the full hero layout with per-provider 12-hour sparklines and a footer when it is tall enough. Every style is resizable to any cell count the launcher offers and drops its least important element rather than clipping: ring captions disappear before the dials shrink, the chart sheds its axes before the plot does, and dragging a widget taller grows the charts instead of leaving a gap.
+
+## Settings
+
+All of these change the widgets immediately, with a live preview in the app:
+
+- **Which providers to show.** Hide one and the other gets a roomier layout — every window on its own row instead of squeezed into chips.
+- **Theme** — follow the system, or force dark/light regardless of it.
+- **Background opacity**, 40–100%, for translucency over the wallpaper.
+- **Burn-projection warning** and **trend sparklines** can each be turned off.
+- **Alerts** — get notified when a window passes 75/80/90/95%. Fires once per window per reset period, not on every refresh.
+- **Auto-refresh** every 15 min / 30 min / 1 h / 2 h.
+- **Copy diagnostics** puts the current state on the clipboard. No tokens are included.
 
 ## What it shows
 
@@ -56,6 +68,12 @@ gradle assembleRelease
 
 The signing keystore is not committed; without one the release build is unsigned — add your own `keystore.jks` at the repo root (alias `aiusage`, password `aiusage-local`) or adjust `app/build.gradle`.
 
-### Seeing the widget without a phone
+### Tests
 
-The widget is drawn on a `Canvas`, so it can be rendered off-device. `gradle testReleaseUnitTest` runs every style at every layout tier through Robolectric's native (real Skia) graphics and writes PNGs to `app/build/widget-shots/` — the same pixels the launcher would draw.
+`gradle testReleaseUnitTest` runs the lot:
+
+- **Rendering.** The widget is drawn on a `Canvas`, so it can be rendered off-device. Every style is rendered at every layout tier, at both resize extremes, under each display setting, and in both themes through Robolectric's native (real Skia) graphics — the same pixels the launcher would draw. PNGs land in `app/build/widget-shots/` for eyeballing.
+- **Layout invariants.** The chosen tier must never need more height than it was given, must never get poorer as the widget grows, and every height in the resizable range must draw.
+- **Logic.** Window naming, plan prettifying, time-remaining formatting, which window binds, and when a burn projection is warranted.
+- **Alerts.** That a window over the threshold interrupts once and not on every refresh, and speaks again after it resets.
+- **The settings screen** inflates with every control bound, and toggling one reaches the stored setting.

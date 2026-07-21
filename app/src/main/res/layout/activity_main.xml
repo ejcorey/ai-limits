@@ -23,15 +23,87 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:text="Machine-spirit readout of your Claude + Codex limits — standalone, shares nothing with other apps or devices"
+            android:text="Your Claude + Codex limits — standalone, shares nothing with other apps or devices"
             android:textColor="@color/text2"
             android:textSize="13sp" />
 
-        <!-- Claude card -->
+        <!-- ============ live widget preview ============ -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
+            android:layout_marginTop="18dp"
+            android:background="@drawable/card_bg"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                style="@style/SectionTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Widget preview" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="Exactly what the home screen will draw, with your current data and settings."
+                android:textColor="@color/text2"
+                android:textSize="12sp" />
+
+            <ImageView
+                android:id="@+id/preview"
+                android:layout_width="match_parent"
+                android:layout_height="168dp"
+                android:layout_marginTop="12dp"
+                android:adjustViewBounds="true"
+                android:contentDescription="Widget preview"
+                android:scaleType="fitCenter" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Style"
+                    android:textColor="@color/text2"
+                    android:textSize="13sp" />
+
+                <Spinner
+                    android:id="@+id/spinnerStyle"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:layout_weight="1" />
+            </LinearLayout>
+
+            <SeekBar
+                android:id="@+id/seekPreviewSize"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:max="100"
+                android:progress="45" />
+
+            <TextView
+                android:id="@+id/previewSizeLabel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:text="Drag to see how it reflows when resized"
+                android:textColor="@color/text2"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <!-- ============ Claude ============ -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
             android:background="@drawable/card_bg"
             android:orientation="vertical"
             android:padding="16dp">
@@ -93,7 +165,7 @@
             </LinearLayout>
         </LinearLayout>
 
-        <!-- Codex card -->
+        <!-- ============ Codex ============ -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -159,49 +231,217 @@
             </LinearLayout>
         </LinearLayout>
 
-        <Button
-            android:id="@+id/btnRefresh"
-            style="@style/Widget.Material3.Button"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="Refresh usage now" />
-
+        <!-- ============ widget appearance ============ -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
+            android:layout_marginTop="12dp"
+            android:background="@drawable/card_bg"
+            android:orientation="vertical"
+            android:padding="16dp">
 
             <TextView
+                style="@style/SectionTitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Auto-refresh every"
+                android:text="Widget appearance" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/swShowClaude"
+                style="@style/Row"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Show Claude" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/swShowCodex"
+                style="@style/Row"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Show Codex" />
+
+            <TextView
+                android:id="@+id/soloHint"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="With one provider hidden, the other gets a full row per window."
+                android:textColor="@color/text2"
+                android:textSize="11sp"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Theme"
+                    android:textColor="@color/text2"
+                    android:textSize="13sp" />
+
+                <Spinner
+                    android:id="@+id/spinnerTheme"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:layout_weight="1" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/opacityLabel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="Background opacity"
                 android:textColor="@color/text2"
                 android:textSize="13sp" />
 
-            <Spinner
-                android:id="@+id/spinnerInterval"
-                android:layout_width="wrap_content"
+            <SeekBar
+                android:id="@+id/seekOpacity"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="10dp" />
+                android:max="60"
+                android:progress="60" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/swProjection"
+                style="@style/Row"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Warn when on pace to hit the cap" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/swSparkline"
+                style="@style/Row"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Show trend sparklines on tall widgets" />
         </LinearLayout>
 
-        <TextView
-            android:id="@+id/updated"
+        <!-- ============ alerts ============ -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:gravity="center"
-            android:textColor="@color/text2"
-            android:textSize="12sp" />
+            android:background="@drawable/card_bg"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                style="@style/SectionTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Alerts" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/swNotify"
+                style="@style/Row"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Notify me when a window fills up" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Alert at"
+                    android:textColor="@color/text2"
+                    android:textSize="13sp" />
+
+                <Spinner
+                    android:id="@+id/spinnerThreshold"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:layout_weight="1" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Fires once per window per reset period, not on every refresh."
+                android:textColor="@color/text2"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <!-- ============ refresh ============ -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/card_bg"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                style="@style/SectionTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Refresh" />
+
+            <Button
+                android:id="@+id/btnRefresh"
+                style="@style/Widget.Material3.Button"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Refresh usage now" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Automatically every"
+                    android:textColor="@color/text2"
+                    android:textSize="13sp" />
+
+                <Spinner
+                    android:id="@+id/spinnerInterval"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:layout_weight="1" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/updated"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center"
+                android:textColor="@color/text2"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/btnDiagnostics"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Copy diagnostics" />
+        </LinearLayout>
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="Widgets: long-press your home screen → Widgets → Auspex.\nFour styles: Detail (bars + resets), Slim (two bars), Percent (big numbers), Graph (last 24 h).\nTap any widget to refresh immediately."
+            android:layout_marginTop="16dp"
+            android:layout_marginBottom="8dp"
+            android:text="Add a widget: long-press the home screen → Widgets → Auspex. All four styles resize; the Detail one changes layout as you drag it."
             android:textColor="@color/text2"
             android:textSize="12sp" />
     </LinearLayout>

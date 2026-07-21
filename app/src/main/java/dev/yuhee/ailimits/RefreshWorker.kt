@@ -19,7 +19,8 @@ class RefreshWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ct
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
-            UsageRepo.fetchAll(applicationContext)
+            val snap = UsageRepo.fetchAll(applicationContext)
+            Notifier.check(applicationContext, snap)
         } finally {
             WidgetRenderer.updateAll(applicationContext)
         }

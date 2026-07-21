@@ -58,8 +58,15 @@ class WidgetRenderTest {
     /** Widgets are overwhelmingly seen on a dark home screen, so that is the default. */
     private fun dark() = org.robolectric.RuntimeEnvironment.setQualifiers("+night")
 
-    private fun shoot(name: String, style: WidgetRenderer.Style, w: Float, h: Float, s: Snapshot = snap()) {
-        val (bmp, _) = WidgetRenderer.render(ctx, style, w, h, s, history)
+    private fun shoot(
+        name: String,
+        style: WidgetRenderer.Style,
+        w: Float,
+        h: Float,
+        s: Snapshot = snap(),
+        o: WidgetRenderer.Opts = WidgetRenderer.Opts(),
+    ) {
+        val (bmp, _) = WidgetRenderer.render(ctx, style, w, h, s, history, o = o)
         File(out, "$name.png").outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
         assertTrue("$name should have pixels", bmp.width > 0 && bmp.height > 0)
         // A blank canvas means the draw silently no-oped.
@@ -121,6 +128,69 @@ class WidgetRenderTest {
                 ProviderState(true, listOf(Win("5h", 5, now + 9 * hour)), null, "chatgpt_business"),
                 now - 90 * 60_000,
             ))
+    }
+
+    /**
+     * The launcher lets a user drag a widget to any cell count, so every style has
+     * to survive the extremes rather than only the sizes it was designed against.
+     */
+    @Test
+    fun resizeExtremes() {
+        dark()
+        val sizes = listOf(
+            140f to 40f,    // smallest the manifest allows anyone to shrink to
+            150f to 80f,
+            180f to 60f,
+            250f to 45f,    // very wide and very short
+            420f to 70f,
+            420f to 320f,   // largest the manifest allows
+            200f to 320f,   // narrow and very tall
+        )
+        for (style in WidgetRenderer.Style.entries) {
+            for ((w, h) in sizes) {
+                shoot("resize-${style.name.lowercase()}-${w.toInt()}x${h.toInt()}", style, w, h)
+            }
+        }
+    }
+
+    /** Every height in the resizable range must draw without throwing. */
+    @Test
+    fun everyHeightInRangeRenders() {
+        dark()
+        var n = 0
+        var h = 40f
+        while (h <= 320f) {
+            WidgetRenderer.render(ctx, WidgetRenderer.Style.DETAIL, 264f, h, snap(), history)
+            WidgetRenderer.render(ctx, WidgetRenderer.Style.DETAIL, 150f, h, snap(), history)
+            n++
+            h += 4f
+        }
+        assertTrue("expected a sweep", n > 60)
+    }
+
+    @Test
+    fun soloProvider() {
+        dark()
+        val onlyClaude = WidgetRenderer.Opts(showClaude = true, showCodex = false)
+        val onlyCodex = WidgetRenderer.Opts(showClaude = false, showCodex = true)
+        shoot("solo-claude-264x160", WidgetRenderer.Style.DETAIL, 264f, 160f, o = onlyClaude)
+        shoot("solo-claude-264x232", WidgetRenderer.Style.DETAIL, 264f, 232f, o = onlyClaude)
+        shoot("solo-claude-264x104", WidgetRenderer.Style.DETAIL, 264f, 104f, o = onlyClaude)
+        shoot("solo-codex-264x160", WidgetRenderer.Style.DETAIL, 264f, 160f, o = onlyCodex)
+        shoot("solo-rings-180x110", WidgetRenderer.Style.RINGS, 180f, 110f, o = onlyClaude)
+        shoot("solo-bars-264x60", WidgetRenderer.Style.BARS, 264f, 60f, o = onlyClaude)
+        shoot("solo-graph-264x132", WidgetRenderer.Style.GRAPH, 264f, 132f, o = onlyClaude)
+    }
+
+    @Test
+    fun displayOptions() {
+        dark()
+        shoot("opt-translucent", WidgetRenderer.Style.DETAIL, 264f, 160f,
+            o = WidgetRenderer.Opts(opacity = 55))
+        shoot("opt-no-sparkline", WidgetRenderer.Style.DETAIL, 264f, 232f,
+            o = WidgetRenderer.Opts(sparkline = false))
+        shoot("opt-sparkline", WidgetRenderer.Style.DETAIL, 264f, 232f,
+            o = WidgetRenderer.Opts(sparkline = true))
     }
 
     @Test
