@@ -47,9 +47,12 @@ All of these change the widgets immediately, with a live preview in the app:
 - **Claude**: 5-hour window, 7-day window, plus Opus/Sonnet 7-day windows when present.
 - **Codex**: primary (≈5 h) and weekly windows, plus the plan type as a chip.
 - **The binding window** — whichever is fullest — is the headline number, because that is the one that will actually stop you.
+- **"USED" prefixes every headline number**, and a companion "N% left" is shown, so there is no confusion between how much is spent and how much remains.
+- **Burn rate**: how fast the binding window is climbing right now, in points per hour ("burning 6%/hr", "holding steady", "easing off"), read from recent history.
 - **Reset** as both a clock time and time remaining ("resets 18:12 · 3h 40m left").
 - **Colour escalates** with pressure: provider colour under 75%, amber to 90%, red above.
 - **Burn projection**: if recent history says you will hit the cap before the window resets, the header switches to "on pace to cap 16:52".
+- Tall or sparkline-less widgets fill the freed space with the stats line rather than leaving a gap.
 - A stale-data dot appears if the last successful fetch is over an hour old.
 
 ## How it works

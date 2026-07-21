@@ -295,16 +295,15 @@ object WidgetRenderer {
         val slack = h - pad * 2 - bh * n
         val foot = slack >= MIN_GAP + FOOT
 
-        // Spend leftover height on the chart rather than leaving a dead zone:
-        // a widget dragged tall should show more, not the same thing with a gap.
+        // Spend leftover height on content rather than leaving a dead zone: a widget
+        // dragged tall should show more, not the same thing with a gap. Every FULL/RICH
+        // block can absorb surplus — into a stats line, then a taller sparkline — so the
+        // gap is kept tight and the slack flows into the blocks instead of between them.
         var free = slack - if (foot) FOOT else 0f
-        // Only a sparkline can absorb surplus height. Without one there is nothing to
-        // grow, so the slack goes into a wider gap and the blocks are centred rather
-        // than pinned to the top with a void underneath.
-        val canStretch = tier == RICH && o.sparkline
-        val gap = min(if (canStretch) 24f else 40f, max(MIN_GAP, free / max(1, n)))
+        val canStretch = tier == RICH || tier == FULL
+        val gap = min(20f, max(MIN_GAP, free / max(1, n + 1)))
         free -= gap * (n - 1)
-        val stretch = if (canStretch) min(90f, max(0f, free / n - 4f)) else 0f
+        val stretch = if (canStretch) min(96f, max(0f, free / n)) else 0f
         val bhEff = bh + stretch
         val used = bhEff * n + gap * (n - 1)
         val y = pad + max(0f, (h - pad * 2 - (if (foot) FOOT else 0f) - used) / 2f)
@@ -383,11 +382,21 @@ object WidgetRenderer {
         val tight = h < 132f
         val hy = pad + if (tight) 14f else 18f
         val heroSize = if (tight) 29f else 35f
-        val nw = g.text("${b.pct}", x, hy + heroSize * .77f, heroSize, 700, sc, tracking = -.017f)
-        g.text("%", x + nw + 3f, hy + heroSize * .77f, heroSize * .43f, 700, sc)
-        val bx = x + nw + if (tight) 22f else 26f
+        val heroBase = hy + heroSize * .77f
+        // "USED" eyebrow, inline left of the number, so the headline reads "USED 68%".
+        val ew = g.text("USED", x, heroBase - heroSize * .30f, 9f, 700, t.dim, tracking = .06f)
+        val hx = x + ew + 7f
+        val nw = g.text("${b.pct}", hx, heroBase, heroSize, 700, sc, tracking = -.017f)
+        g.text("%", hx + nw + 3f, heroBase, heroSize * .43f, 700, sc)
+        val bx = hx + nw + if (tight) 22f else 26f
         g.bar(bx, hy + heroSize * .31f, x + cw - bx, if (tight) 10f else 12f, b.pct, sc)
-        g.text(windowName(b.label), x, hy + heroSize * .77f + 15f, 10f, 500, t.dim, tracking = .02f)
+        val nameY = heroBase + 15f
+        g.text(windowName(b.label), x, nameY, 10f, 500, t.dim, tracking = .02f)
+        // Fill the room beside the window name with what is left and how fast it is going.
+        val burn = burnText(p.series)
+        val stat = "${100 - b.pct}% left" + (burn?.let { " · " + it.first } ?: "")
+        g.text(stat, x + cw, nameY, 9.5f, 500,
+            if (burn?.second == true) t.warn else t.faint, Paint.Align.RIGHT)
 
         // Every other window gets a real row.
         val rest = p.state.windows.filter { it !== b }
@@ -461,18 +470,22 @@ object WidgetRenderer {
 
         if (med) {
             val pw = g.text("${b.pct}%", x + w, y + 24f, 13.5f, 700, sc, Paint.Align.RIGHT)
-            g.bar(x, y + 15f, w - pw - 10f, 9f, b.pct, sc)
+            val uw = g.text("USED", x + w - pw - 5f, y + 24f, 8f, 700, t.dim, Paint.Align.RIGHT, .06f)
+            g.bar(x, y + 15f, w - pw - uw - 15f, 9f, b.pct, sc)
             g.text(
-                shortWindow(b.label) + " · resets " + clock(b.resetsAt) + " · " + left(b.resetsAt) + " left",
+                shortWindow(b.label) + " · " + (100 - b.pct) + "% left · resets " + clock(b.resetsAt),
                 x, y + 35f, 9f, 500, t.faint
             )
             return
         }
 
-        // Hero: big number with the bar alongside it — stacking it wasted the width.
-        val nw = g.text("${b.pct}", x, y + 37f, 29f, 700, sc, tracking = -.017f)
-        g.text("%", x + nw + 2f, y + 37f, 12.5f, 700, sc)
-        val bx = x + nw + 21f
+        // Hero: a small "USED" eyebrow spells out that the big number is consumption,
+        // not what remains — the ambiguity the user kept hitting. Bar alongside it.
+        val ew = g.text("USED", x, y + 34f, 9f, 700, t.dim, tracking = .06f)
+        val hx = x + ew + 7f
+        val nw = g.text("${b.pct}", hx, y + 37f, 29f, 700, sc, tracking = -.017f)
+        g.text("%", hx + nw + 2f, y + 37f, 12.5f, 700, sc)
+        val bx = hx + nw + 21f
         g.bar(bx, y + 23f, x + w - bx, 10f, b.pct, sc)
 
         val my = y + 43f
@@ -486,8 +499,21 @@ object WidgetRenderer {
             drawSecondary(g, x + w, my + 8f, room, st.windows.filter { it !== b }, color, t)
         }
 
-        if (tier == RICH && o.sparkline) {
-            sparkline(g, x, y + H_FULL + 2f, w, SPARK - 6f + stretch, series, color, t)
+        // Everything under the meta line is opportunistic, spent to fill the block so a
+        // tall or sparkline-less widget shows more rather than leaving a void. When a
+        // sparkline is wanted it is the RICH signature and takes the space first, with a
+        // stats line (how much is left, how fast it is burning) lifted above it only when
+        // there is comfortably room for both. Otherwise the stats line alone fills
+        // whatever height the block was stretched to.
+        val wantSpark = tier == RICH && o.sparkline
+        val blockBottom = y + blockH(tier, o.sparkline) + stretch
+        var top = y + 55f
+        if (wantSpark) {
+            var sh = blockBottom - top - 2f
+            if (sh >= 32f) { drawStats(g, x, top + 8f, w, b, series, t); top += 16f; sh -= 16f }
+            if (sh >= 16f) sparkline(g, x, top, w, blockBottom - top - 2f, series, color, t)
+        } else if (blockBottom - top >= 7f) {
+            drawStats(g, x, top + 8f, w, b, series, t)
         }
     }
 
@@ -620,6 +646,10 @@ object WidgetRenderer {
             val pw = if (b != null) g.measure("%", r * .26f, 700) else 0f
             val off = (nw + pw + 1.5f) / 2f
             val c = if (b != null) t.status(b.pct, color) else t.faint
+            // "USED" above the dial number, so the reading is unambiguous even at a glance.
+            if (b != null && r >= 26f) {
+                g.text("USED", cx, cy - ns * .5f, min(8.5f, r * .18f), 700, t.dim, Paint.Align.CENTER, .02f)
+            }
             g.text(label, cx - off, cy + ns * .34f, ns, 700, c, tracking = -.017f)
             if (b != null) g.text("%", cx - off + nw + 1.5f, cy + ns * .34f, r * .26f, 700, c)
             if (showLabel) g.text(name, cx, cy + r + 11f, 9f, 700, t.dim, Paint.Align.CENTER, .05f)
@@ -646,7 +676,9 @@ object WidgetRenderer {
         // offsets, which used to go negative and push text past the right edge.
         val nameW = min(56f, max(0f, cw * .26f))
         val showName = nameW >= 40f
-        val pctW = min(40f, cw * .18f)
+        // Wide enough to spell out "USED nn%"; otherwise the number stands alone.
+        val showUsed = cw >= 200f
+        val pctW = if (showUsed) min(78f, cw * .30f) else min(40f, cw * .18f)
         val resetW = if (cw >= 210f) min(52f, cw * .2f) else 0f
         val barX = pad + if (showName) nameW else 12f
         val barW = max(16f, pad + cw - resetW - pctW - 6f - barX)
@@ -661,8 +693,13 @@ object WidgetRenderer {
                     if (p.state.configured) p.color else t.dim, tracking = .03f)
             }
             g.bar(barX, y + 2f, barW, 8f, b?.pct ?: 0, sc)
-            g.text(if (b != null) "${b.pct}%" else "--", barX + barW + pctW, y + 8.5f, 11f, 700,
+            val numRight = barX + barW + pctW
+            val numW = g.text(if (b != null) "${b.pct}%" else "--", numRight, y + 8.5f, 11f, 700,
                 t.text, Paint.Align.RIGHT)
+            if (b != null && showUsed) {
+                g.text("USED", numRight - numW - 4f, y + 8.5f, 7.5f, 700, t.dim,
+                    Paint.Align.RIGHT, .06f)
+            }
             if (resetW > 0f) {
                 g.text(if (b != null) left(b.resetsAt) else "—", pad + cw, y + 8.5f, 8.5f, 500,
                     t.faint, Paint.Align.RIGHT)
@@ -775,6 +812,41 @@ object WidgetRenderer {
         val at = now + ((100 - last.second) / rate * 3600_000f).toLong()
         if (b.resetsAt > 0 && at >= b.resetsAt) return null
         return at
+    }
+
+    /**
+     * Recent consumption of the binding window, in percentage points per hour —
+     * the "burn" the user reads to know how fast the quota is going. Averaged over
+     * up to the last 3h; null when there isn't enough recent signal to be honest.
+     */
+    internal fun burnRate(series: List<Pair<Long, Int>>): Float? {
+        val now = System.currentTimeMillis()
+        val pts = series.filter { it.first >= now - 3 * 3600_000L && it.second >= 0 }
+        if (pts.size < 2) return null
+        val first = pts.first()
+        val last = pts.last()
+        val hours = (last.first - first.first) / 3600_000f
+        if (hours < .4f) return null
+        return (last.second - first.second) / hours
+    }
+
+    /** Burn as a phrase, plus whether it is steep enough to colour. Null = say nothing. */
+    private fun burnText(series: List<Pair<Long, Int>>): Pair<String, Boolean>? {
+        val r = burnRate(series) ?: return null
+        return when {
+            r >= 1f -> "burning ${r.roundToInt()}%/hr" to (r >= 8f)
+            r <= -1f -> "easing off" to false
+            else -> "holding steady" to false
+        }
+    }
+
+    /** A supporting line under the hero: how much is left, and how fast it is going. */
+    private fun drawStats(
+        g: Pen, x: Float, baseY: Float, w: Float, b: Win, series: List<Pair<Long, Int>>, t: Theme,
+    ) {
+        g.text("${100 - b.pct}% left", x, baseY, 9.5f, 600, t.dim)
+        val burn = burnText(series) ?: return
+        g.text(burn.first, x + w, baseY, 9.5f, 500, if (burn.second) t.warn else t.faint, Paint.Align.RIGHT)
     }
 
     private fun clock(ms: Long): String =
