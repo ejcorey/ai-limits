@@ -76,4 +76,6 @@ The signing keystore is not committed; without one the release build is unsigned
 - **Layout invariants.** The chosen tier must never need more height than it was given, must never get poorer as the widget grows, and every height in the resizable range must draw.
 - **Logic.** Window naming, plan prettifying, time-remaining formatting, which window binds, and when a burn projection is warranted.
 - **Alerts.** That a window over the threshold interrupts once and not on every refresh, and speaks again after it resets.
-- **The settings screen** inflates with every control bound, and toggling one reaches the stored setting.
+- **The settings screen** inflates with every control bound, toggling one reaches the stored setting, and system-bar insets become padding.
+- **Widget inflation.** Every tag in the widget layout is checked for the `@RemoteView` annotation, and the RemoteViews each style publishes is actually inflated. RemoteViews only accepts annotated view classes; anything else throws in the launcher and surfaces as nothing more than "Couldn't add widget", which no amount of rendering tests will catch.
+- **Parsing.** That an unrecognised 200 is treated as a failure rather than as "no limits", so a schema change cannot silently erase good data. These run under Robolectric because the stock JVM `org.json` is a stub that throws on every call — enough to make a "this should throw" assertion pass without the parser running at all.

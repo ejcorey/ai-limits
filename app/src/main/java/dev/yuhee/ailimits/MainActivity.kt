@@ -25,6 +25,8 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.materialswitch.MaterialSwitch
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.content.ContextCompat
@@ -45,6 +47,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        applyInsets()
 
         findViewById<Button>(R.id.btnClaudeSignIn).setOnClickListener {
             val url = ClaudeApi.beginLogin(this)
@@ -145,7 +148,7 @@ class MainActivity : AppCompatActivity() {
         updateOpacityLabel(Settings.opacity(this))
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar?, value: Int, fromUser: Boolean) {
-                if (fromUser) { Settings.setOpacity(this@MainActivity, value + 40); updateOpacityLabel(value + 40); renderPreview() }
+                if (fromUser) { Settings.setOpacity(this@MainActivity, value + 40); updateOpacityLabel(value + 40); renderPreview(force = true) }
             }
             override fun onStartTrackingTouch(sb: SeekBar?) {}
             override fun onStopTrackingTouch(sb: SeekBar?) { applyWidgetChange() }
@@ -179,7 +182,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setUpAlerts() {
-        switch(R.id.swNotify, Settings.notifyEnabled(this)) { on ->
+        // Permission can be revoked in system settings while the preference stays on;
+        // showing the switch as enabled would promise alerts that can never arrive.
+        switch(R.id.swNotify, Settings.notifyEnabled(this) && Notifier.canPost(this)) { on ->
             if (on && !Notifier.canPost(this)) {
                 requestNotifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
             } else {
@@ -207,7 +212,7 @@ class MainActivity : AppCompatActivity() {
         val styles = WidgetRenderer.Style.entries
         val labels = listOf("Detail", "Slim bars", "Rings", "History")
         spinner(R.id.spinnerStyle, labels, styles.indexOf(Settings.previewStyle(this))) { pos ->
-            Settings.setPreviewStyle(this, styles[pos]); renderPreview()
+            Settings.setPreviewStyle(this, styles[pos]); renderPreview(force = true)
         }
         findViewById<SeekBar>(R.id.seekPreviewSize)
             .setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -221,11 +226,21 @@ class MainActivity : AppCompatActivity() {
      * Renders the real widget so the preview cannot drift from the home screen.
      * The slider sweeps the height across every layout tier the widget supports.
      */
-    private fun renderPreview() {
+    private var lastPreviewHeight = -1f
+
+    /**
+     * @param force redraw even at an unchanged size — needed whenever the data or a
+     * setting changed, since only the size is used to skip redundant work.
+     */
+    private fun renderPreview(force: Boolean = false) {
         val img = findViewById<ImageView>(R.id.preview) ?: return
         val frac = findViewById<SeekBar>(R.id.seekPreviewSize).progress / 100f
-        val hDp = 64f + frac * 176f          // 64dp .. 240dp spans compact -> rich
+        // Quantised to 4dp: dragging fires per pixel, and each render allocates a
+        // multi-megabyte bitmap on the main thread, which made the slider stutter.
+        val hDp = ((64f + frac * 176f) / 4f).toInt() * 4f   // 64dp .. 240dp, compact -> rich
         val wDp = 264f
+        if (!force && hDp == lastPreviewHeight && img.drawable != null) return
+        lastPreviewHeight = hDp
         val snap = UsageRepo.load(this)
         val hist = UsageRepo.history(this)
         runCatching {
@@ -241,7 +256,7 @@ class MainActivity : AppCompatActivity() {
 
     /** Persisted setting changed: redraw both the preview and any live widgets. */
     private fun applyWidgetChange() {
-        renderPreview()
+        renderPreview(force = true)
         WidgetRenderer.updateAll(this)
     }
 
@@ -276,7 +291,7 @@ class MainActivity : AppCompatActivity() {
     private fun copyDiagnostics() {
         val snap = UsageRepo.load(this)
         val sb = StringBuilder("Auspex diagnostics\n")
-        sb.append("version 2.2\n")
+        sb.append("version 2.3\n")
         sb.append("updated: ").append(if (snap.fetchedAt > 0) Date(snap.fetchedAt).toString() else "never").append('\n')
         listOf("Claude" to snap.claude, "Codex" to snap.codex).forEach { (name, st) ->
             sb.append(name).append(": configured=").append(st.configured)
@@ -292,6 +307,25 @@ class MainActivity : AppCompatActivity() {
         (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager)
             .setPrimaryClip(ClipData.newPlainText("Auspex diagnostics", sb.toString()))
         toast("Diagnostics copied — no tokens included")
+    }
+
+    /**
+     * Android 15 draws every targetSdk-35 app edge-to-edge, so the window no longer
+     * insets content for the status bar or the gesture/navigation bar — the app has
+     * to do it. Padding the scroll container keeps the whole screen inside the safe
+     * area; the cutout inset is included so the top does not collide with a notch in
+     * landscape. Consuming the insets stops them being applied twice by children.
+     */
+    private fun applyInsets() {
+        val root = findViewById<View>(R.id.scrollRoot)
+        ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            WindowInsetsCompat.CONSUMED
+        }
+        ViewCompat.requestApplyInsets(root)
     }
 
     private var codexExchangeInFlight = false
@@ -349,7 +383,12 @@ class MainActivity : AppCompatActivity() {
         btn.text = "Refreshing…"
         scope.launch {
             try {
-                withContext(Dispatchers.IO) { UsageRepo.fetchAll(this@MainActivity) }
+                withContext(Dispatchers.IO) {
+                    val snap = UsageRepo.fetchAll(this@MainActivity)
+                    // A refresh from the app is still a refresh: a threshold crossing
+                    // seen here should alert, not wait for the next background run.
+                    Notifier.check(this@MainActivity, snap)
+                }
                 WidgetRenderer.updateAll(this@MainActivity)
             } catch (e: Exception) {
                 showError("Refresh failed", e)

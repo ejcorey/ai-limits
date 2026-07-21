@@ -3,6 +3,9 @@ package dev.yuhee.ailimits
 import android.widget.ImageView
 import android.widget.SeekBar
 import android.widget.Spinner
+import androidx.core.graphics.Insets
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.materialswitch.MaterialSwitch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -41,6 +44,37 @@ class MainActivityTest {
             assertNotNull(a.findViewById<MaterialSwitch>(R.id.swProjection))
             assertNotNull(a.findViewById<MaterialSwitch>(R.id.swSparkline))
             assertNotNull(a.findViewById<MaterialSwitch>(R.id.swNotify))
+        }
+    }
+
+    /**
+     * targetSdk 35 means Android 15 hands the app a window that extends under the
+     * status and navigation bars. Without this the header sat under the clock and the
+     * last row sat under the gesture pill.
+     */
+    @Test
+    fun `system bar insets become padding`() {
+        launch().use { c ->
+            val root = c.get().findViewById<android.view.View>(R.id.scrollRoot)
+            val insets = WindowInsetsCompat.Builder()
+                .setInsets(WindowInsetsCompat.Type.systemBars(), Insets.of(0, 96, 0, 48))
+                .build()
+            ViewCompat.dispatchApplyWindowInsets(root, insets)
+            assertEquals("status bar must be cleared", 96, root.paddingTop)
+            assertEquals("navigation bar must be cleared", 48, root.paddingBottom)
+        }
+    }
+
+    @Test
+    fun `display cutout is cleared too`() {
+        launch().use { c ->
+            val root = c.get().findViewById<android.view.View>(R.id.scrollRoot)
+            val insets = WindowInsetsCompat.Builder()
+                .setInsets(WindowInsetsCompat.Type.systemBars(), Insets.of(0, 40, 0, 20))
+                .setInsets(WindowInsetsCompat.Type.displayCutout(), Insets.of(70, 0, 0, 0))
+                .build()
+            ViewCompat.dispatchApplyWindowInsets(root, insets)
+            assertEquals("a landscape notch must not overlap content", 70, root.paddingLeft)
         }
     }
 

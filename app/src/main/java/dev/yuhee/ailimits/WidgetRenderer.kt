@@ -14,6 +14,7 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
+import android.util.Log
 import android.view.View
 import android.widget.RemoteViews
 import java.text.SimpleDateFormat
@@ -77,8 +78,10 @@ object WidgetRenderer {
     private const val MEDIUM = 1
     private const val COMPACT = 0
 
-    private fun blockH(tier: Int) = when (tier) {
-        RICH -> H_RICH
+    private fun blockH(tier: Int, sparkline: Boolean = true) = when (tier) {
+        // With sparklines switched off the rich tier has nothing extra to draw, so
+        // reserving their height would just leave a gap.
+        RICH -> if (sparkline) H_RICH else H_FULL
         FULL -> H_FULL
         else -> H_MED
     }
@@ -86,13 +89,13 @@ object WidgetRenderer {
     private fun padFor(tier: Int) = if (tier == MEDIUM) 11f else 13f
 
     /** Height a tier needs for [panels] providers, padding and gap included. */
-    internal fun neededHeight(tier: Int, panels: Int) =
-        padFor(tier) * 2 + blockH(tier) * panels + MIN_GAP
+    internal fun neededHeight(tier: Int, panels: Int, sparkline: Boolean = true) =
+        padFor(tier) * 2 + blockH(tier, sparkline) * panels + MIN_GAP
 
     /** The richest layout that genuinely fits, or [COMPACT] when none does. */
-    internal fun tierFor(h: Float, panels: Int): Int {
+    internal fun tierFor(h: Float, panels: Int, sparkline: Boolean = true): Int {
         for (candidate in intArrayOf(RICH, FULL, MEDIUM)) {
-            if (neededHeight(candidate, panels) <= h) return candidate
+            if (neededHeight(candidate, panels, sparkline) <= h) return candidate
         }
         return COMPACT
     }
@@ -109,7 +112,12 @@ object WidgetRenderer {
 
     fun anyWidgets(ctx: Context): Boolean = providers.any { ids(ctx, it).isNotEmpty() }
 
-    fun updateAll(ctx: Context, refreshing: Boolean = false) {
+    fun updateAll(ctx: Context, refreshing: Boolean = false) = update(ctx, refreshing, null)
+
+    /** Redraws a single widget — used while resizing, which fires per drag step. */
+    fun updateOne(ctx: Context, appWidgetId: Int) = update(ctx, false, appWidgetId)
+
+    private fun update(ctx: Context, refreshing: Boolean, onlyId: Int?) {
         val mgr = AppWidgetManager.getInstance(ctx)
         val snap = UsageRepo.load(ctx)
         val hist = UsageRepo.history(ctx)
@@ -119,8 +127,13 @@ object WidgetRenderer {
         // Sizes differ per instance, so each widget is rendered on its own.
         providers.forEach { cls ->
             ids(ctx, cls).forEach { id ->
-                runCatching {
+                if (onlyId != null && id != onlyId) return@forEach
+                try {
                     mgr.updateAppWidget(id, build(ctx, mgr, id, cls, snap, hist, theme, opts, refreshing))
+                } catch (e: Throwable) {
+                    // One bad widget must not stop the others, but a silent failure
+                    // leaves a blank widget with no way to find out why.
+                    Log.e("Auspex", "widget $id (${cls.simpleName}) failed to render", e)
                 }
             }
         }
@@ -149,6 +162,25 @@ object WidgetRenderer {
             GraphWidgetProvider::class.java -> Style.GRAPH
             else -> Style.DETAIL
         }
+        return compose(ctx, style, wDp, hDp, snap, hist, t, o, refreshing)
+    }
+
+    /**
+     * Builds the RemoteViews a launcher will inflate. Split out of [build] so a test
+     * can construct and apply the real thing without an AppWidgetManager — inflating
+     * it is the only way to catch a view class RemoteViews refuses to accept.
+     */
+    internal fun compose(
+        ctx: Context,
+        style: Style,
+        wDp: Float,
+        hDp: Float,
+        snap: Snapshot,
+        hist: List<Triple<Long, Int, Int>>,
+        t: Theme? = null,
+        o: Opts = Opts(),
+        refreshing: Boolean = false,
+    ): RemoteViews {
         val (bmp, footer) = render(ctx, style, wDp, hDp, snap, hist, refreshing, t, o)
 
         val rv = RemoteViews(ctx.packageName, R.layout.widget_canvas)
@@ -253,26 +285,29 @@ object WidgetRenderer {
         if (panels.size == 1) return drawSolo(g, w, h, panels[0], t, o, snap, refreshing)
 
         val n = panels.size
-        val tier = tierFor(h, n)
+        val tier = tierFor(h, n, o.sparkline)
         if (tier == COMPACT) { drawCompact(g, w, h, panels, t); return false }
 
         val pad = padFor(tier)
         val x = pad
         val cw = w - pad * 2
-        val bh = blockH(tier)
+        val bh = blockH(tier, o.sparkline)
         val slack = h - pad * 2 - bh * n
         val foot = slack >= MIN_GAP + FOOT
 
         // Spend leftover height on the chart rather than leaving a dead zone:
         // a widget dragged tall should show more, not the same thing with a gap.
         var free = slack - if (foot) FOOT else 0f
-        val gap = min(24f, max(MIN_GAP, free / max(1, n)))
+        // Only a sparkline can absorb surplus height. Without one there is nothing to
+        // grow, so the slack goes into a wider gap and the blocks are centred rather
+        // than pinned to the top with a void underneath.
+        val canStretch = tier == RICH && o.sparkline
+        val gap = min(if (canStretch) 24f else 40f, max(MIN_GAP, free / max(1, n)))
         free -= gap * (n - 1)
-        val stretch =
-            if (tier == RICH && o.sparkline) min(90f, max(0f, free / n - 4f)) else 0f
+        val stretch = if (canStretch) min(90f, max(0f, free / n - 4f)) else 0f
         val bhEff = bh + stretch
         val used = bhEff * n + gap * (n - 1)
-        val y = pad + if (foot) 0f else max(0f, (h - pad * 2 - used) / 2f)
+        val y = pad + max(0f, (h - pad * 2 - (if (foot) FOOT else 0f) - used) / 2f)
 
         panels.forEachIndexed { i, p ->
             val by = y + i * (bhEff + gap)
@@ -335,8 +370,11 @@ object WidgetRenderer {
         val proj = if (o.projection) projection(b, p.series) else null
         val head = if (proj != null) "on pace to cap " + clock(proj)
         else "resets " + clock(b.resetsAt) + " · " + left(b.resetsAt) + " left"
-        if (g.measure(head, 10f, 500) <= x + cw - cx) {
-            g.text(head, x + cw, pad + 10.5f, 10f, if (proj != null) 600 else 500,
+        // Measure at the weight it is actually drawn at — the warning is heavier than
+        // the plain reset text, so measuring at 500 let it overflow the fit guard.
+        val headWeight = if (proj != null) 600 else 500
+        if (g.measure(head, 10f, headWeight) <= x + cw - cx) {
+            g.text(head, x + cw, pad + 10.5f, 10f, headWeight,
                 if (proj != null) t.warn else t.faint, Paint.Align.RIGHT)
         }
 
@@ -774,10 +812,13 @@ object WidgetRenderer {
     /** "plus" -> "Plus", "chatgpt_pro" -> "ChatGPT Pro". */
     internal fun prettyPlan(plan: String?): String? {
         val p = plan?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-        return p.split('_', '-', ' ').filter { it.isNotEmpty() }.joinToString(" ") { word ->
+        val pretty = p.split('_', '-', ' ').filter { it.isNotEmpty() }.joinToString(" ") { word ->
             if (word.equals("chatgpt", true)) "ChatGPT"
             else word.lowercase().replaceFirstChar { it.uppercase() }
         }
+        // The plan string comes straight from the API; cap it so an unexpectedly long
+        // value cannot push the chip past the edge of the card.
+        return if (pretty.length <= 18) pretty else pretty.take(17) + "…"
     }
 
     private fun shortError(e: String): String = when {

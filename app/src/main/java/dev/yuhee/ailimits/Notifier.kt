@@ -47,15 +47,18 @@ object Notifier {
         val threshold = Settings.notifyThreshold(ctx)
         ensureChannel(ctx)
 
+        val already = Settings.firedAlerts(ctx)
         val live = mutableSetOf<String>()
         val fresh = mutableListOf<Triple<String, Win, Int>>()
+        val reporting = mutableSetOf<String>()
 
         fun scan(name: String, state: ProviderState) {
-            if (!state.configured) return
+            if (!state.configured || state.windows.isEmpty()) return
+            reporting += name
             state.windows.forEach { w ->
                 val key = "$name|${w.label}|${w.resetsAt}"
                 live += key
-                if (w.pct >= threshold && key !in Settings.firedAlerts(ctx)) {
+                if (w.pct >= threshold && key !in already) {
                     fresh += Triple(name, w, w.pct)
                 }
             }
@@ -63,8 +66,13 @@ object Notifier {
         scan("Claude", snap.claude)
         scan("Codex", snap.codex)
 
-        // Drop keys for windows that have since reset, so the set cannot grow forever.
-        val kept = Settings.firedAlerts(ctx).intersect(live).toMutableSet()
+        // Drop keys for windows that have since reset, so the set cannot grow forever —
+        // but only for a provider that actually reported this round. Pruning on a failed
+        // fetch (which reports no windows) would forget what has been announced and
+        // re-alert the moment it recovers.
+        val kept = already.filterTo(mutableSetOf()) { key ->
+            key in live || key.substringBefore('|') !in reporting
+        }
 
         fresh.forEach { (name, w, pct) ->
             post(ctx, name, w, pct)

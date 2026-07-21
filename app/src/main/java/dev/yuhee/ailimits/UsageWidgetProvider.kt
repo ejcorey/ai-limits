@@ -14,14 +14,18 @@ abstract class BaseWidgetProvider : AppWidgetProvider() {
         RefreshWorker.refreshNow(context)
     }
 
-    /** Each widget lays itself out against its own size, so a resize must redraw. */
+    /**
+     * Each widget lays itself out against its own size, so a resize must redraw —
+     * but only the one being dragged. This fires repeatedly during a drag, and
+     * re-rendering every widget on the home screen each step made it stutter.
+     */
     override fun onAppWidgetOptionsChanged(
         context: Context,
         appWidgetManager: AppWidgetManager,
         appWidgetId: Int,
         newOptions: Bundle,
     ) {
-        WidgetRenderer.updateAll(context)
+        WidgetRenderer.updateOne(context, appWidgetId)
     }
 
     override fun onEnabled(context: Context) {

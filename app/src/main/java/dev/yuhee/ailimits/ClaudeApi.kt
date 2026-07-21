@@ -130,6 +130,10 @@ object ClaudeApi {
         add("seven_day", "7d")
         add("seven_day_opus", "Opus")
         add("seven_day_sonnet", "Sonnet")
+        // A 200 whose shape we no longer recognise must fail, not succeed with nothing:
+        // the caller only preserves the previous snapshot when this throws, so returning
+        // an empty list would quietly overwrite good data and report no error.
+        if (out.isEmpty()) throw RuntimeException("Unrecognized usage response")
         return out
     }
 

@@ -202,12 +202,21 @@ object CodexApi {
             var resetMs = w.optLong("reset_at", 0) * 1000
             if (resetMs == 0L) {
                 val after = w.optLong("reset_after_seconds", 0)
-                if (after > 0) resetMs = System.currentTimeMillis() + after * 1000
+                // Derived from the clock, so it drifts by seconds on every poll. Rounded
+                // to five minutes it stays put, which matters because the alert de-dup
+                // key embeds this instant — otherwise every refresh looks like a new
+                // window and the same alert fires again and again.
+                if (after > 0) {
+                    val approx = System.currentTimeMillis() + after * 1000
+                    resetMs = (approx / 300_000L) * 300_000L
+                }
             }
             out.add(Win(label, Math.round(pct).toInt().coerceIn(0, 100), resetMs))
         }
         add("primary_window")
         add("secondary_window")
+        // See ClaudeApi: an unrecognised 200 must not be mistaken for "no limits".
+        if (out.isEmpty()) throw RuntimeException("Unrecognized usage response")
         return Pair(out, plan)
     }
 }

@@ -1,5 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Padding for the status and navigation bars is applied at runtime from the real
+  window insets (see MainActivity.applyInsets); targetSdk 35 draws edge-to-edge on
+  Android 15 whatever this layout says, so a hardcoded top margin would be wrong on
+  some devices and short on others.
+-->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/scrollRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/bg"

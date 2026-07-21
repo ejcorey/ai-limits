@@ -7,7 +7,6 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.OutOfQuotaPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -44,9 +43,12 @@ class RefreshWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ct
         }
 
         fun refreshNow(ctx: Context) {
+            // Deliberately not expedited: below API 31 WorkManager runs expedited work as
+            // a foreground service and requires getForegroundInfo(), which CoroutineWorker
+            // does not implement — every tap-to-refresh would fail on API 26-30. A usage
+            // readout is not worth a foreground-service notification.
             val req = OneTimeWorkRequestBuilder<RefreshWorker>()
                 .setConstraints(NET)
-                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                 .build()
             WorkManager.getInstance(ctx)
                 .enqueueUniqueWork("ailimits-now", ExistingWorkPolicy.REPLACE, req)
