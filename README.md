@@ -17,10 +17,28 @@ Grab `AILimits.apk` from the [latest release](../../releases/latest) and open it
 
 The widget refreshes every 30 minutes (WorkManager); tap it to refresh immediately.
 
+## Widget styles
+
+Four styles, all drawn on a canvas so they scale properly instead of clipping:
+
+| Style | Default size | Shows |
+| --- | --- | --- |
+| **Detail** | 4×3 | Both providers: the window that is actually limiting you as a large %, its bar, when it resets, and the remaining windows |
+| **Slim bars** | 4×1 | One thin row per provider — % used and time to reset |
+| **Rings** | 3×2 | Two dial gauges, the tightest limit per provider |
+| **History** | 4×3 | 24-hour chart of both providers with axes and a legend |
+
+**Detail** re-lays itself out for the size you drag it to — from a two-column glance at 4×1, through a bar-per-provider at 4×2, to the full hero layout with per-provider 12-hour sparklines and a footer when it is tall enough.
+
 ## What it shows
 
-- **Claude**: 5-hour window, 7-day window, plus Opus/Sonnet 7-day windows when present — % used and reset time.
-- **Codex**: primary (≈5 h) and weekly windows with % used and reset time, plus plan type.
+- **Claude**: 5-hour window, 7-day window, plus Opus/Sonnet 7-day windows when present.
+- **Codex**: primary (≈5 h) and weekly windows, plus the plan type as a chip.
+- **The binding window** — whichever is fullest — is the headline number, because that is the one that will actually stop you.
+- **Reset** as both a clock time and time remaining ("resets 18:12 · 3h 40m left").
+- **Colour escalates** with pressure: provider colour under 75%, amber to 90%, red above.
+- **Burn projection**: if recent history says you will hit the cap before the window resets, the header switches to "on pace to cap 16:52".
+- A stale-data dot appears if the last successful fetch is over an hour old.
 
 ## How it works
 
@@ -37,3 +55,7 @@ gradle assembleRelease
 ```
 
 The signing keystore is not committed; without one the release build is unsigned — add your own `keystore.jks` at the repo root (alias `aiusage`, password `aiusage-local`) or adjust `app/build.gradle`.
+
+### Seeing the widget without a phone
+
+The widget is drawn on a `Canvas`, so it can be rendered off-device. `gradle testReleaseUnitTest` runs every style at every layout tier through Robolectric's native (real Skia) graphics and writes PNGs to `app/build/widget-shots/` — the same pixels the launcher would draw.

@@ -22,7 +22,7 @@
 
         <receiver
             android:name=".UsageWidgetProvider"
-            android:label="Auspex · Detail"
+            android:label="@string/widget_detail_label"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
@@ -35,7 +35,7 @@
 
         <receiver
             android:name=".BarsWidgetProvider"
-            android:label="Auspex · Slim"
+            android:label="@string/widget_bars_label"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
@@ -47,7 +47,7 @@
 
         <receiver
             android:name=".PercentWidgetProvider"
-            android:label="Auspex · Percent"
+            android:label="@string/widget_rings_label"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
@@ -59,7 +59,7 @@
 
         <receiver
             android:name=".GraphWidgetProvider"
-            android:label="Auspex · Graph 24h"
+            android:label="@string/widget_graph_label"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />

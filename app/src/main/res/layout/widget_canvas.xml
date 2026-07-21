@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The whole widget is one rendered bitmap (see WidgetRenderer). The overlay view
+  is an invisible hit region for "Open app"; the renderer only reveals it on the
+  sizes where the footer is actually drawn.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <ImageView
+        android:id="@+id/widget_canvas"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@string/app_name"
+        android:scaleType="fitCenter" />
+
+    <View
+        android:id="@+id/widget_settings"
+        android:layout_width="76dp"
+        android:layout_height="26dp"
+        android:layout_gravity="bottom|end"
+        android:visibility="gone" />
+</FrameLayout>

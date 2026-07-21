@@ -11,8 +11,8 @@ android {
         applicationId "dev.yuhee.ailimits"
         minSdk 26
         targetSdk 35
-        versionCode 4
-        versionName "2.0"
+        versionCode 5
+        versionName "2.1"
     }
 
     // Local keystore is not committed; clones without it get an unsigned release build.
@@ -40,6 +40,12 @@ android {
     kotlinOptions {
         jvmTarget = '17'
     }
+
+    testOptions {
+        unitTests {
+            includeAndroidResources = true
+        }
+    }
 }
 
 dependencies {
@@ -49,4 +55,8 @@ dependencies {
     implementation 'androidx.work:work-runtime-ktx:2.9.1'
     implementation 'androidx.browser:browser:1.8.0'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
+
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.14.1'
+    testImplementation 'androidx.test:core:1.6.1'
 }

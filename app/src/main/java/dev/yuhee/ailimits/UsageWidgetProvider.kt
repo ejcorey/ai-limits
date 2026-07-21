@@ -4,6 +4,7 @@ import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
 
 abstract class BaseWidgetProvider : AppWidgetProvider() {
 
@@ -11,6 +12,16 @@ abstract class BaseWidgetProvider : AppWidgetProvider() {
         WidgetRenderer.updateAll(context)
         RefreshWorker.schedulePeriodic(context)
         RefreshWorker.refreshNow(context)
+    }
+
+    /** Each widget lays itself out against its own size, so a resize must redraw. */
+    override fun onAppWidgetOptionsChanged(
+        context: Context,
+        appWidgetManager: AppWidgetManager,
+        appWidgetId: Int,
+        newOptions: Bundle,
+    ) {
+        WidgetRenderer.updateAll(context)
     }
 
     override fun onEnabled(context: Context) {

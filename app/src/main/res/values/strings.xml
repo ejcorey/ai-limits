@@ -1,4 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Auspex</string>
+
+    <!-- Shown under each style in the launcher's widget picker. -->
+    <string name="widget_detail_label">Auspex · Detail</string>
+    <string name="widget_detail_desc">Claude and Codex side by side: the window that is actually limiting you, when it resets, and every other window at a glance.</string>
+
+    <string name="widget_bars_label">Auspex · Slim bars</string>
+    <string name="widget_bars_desc">One thin row per provider — percent used and time until reset. Fits a single row of the home screen.</string>
+
+    <string name="widget_rings_label">Auspex · Rings</string>
+    <string name="widget_rings_desc">Two dial gauges showing how much of your tightest limit is spent, and how long until it resets.</string>
+
+    <string name="widget_graph_label">Auspex · History</string>
+    <string name="widget_graph_desc">A 24-hour chart of how fast you have been burning through both providers.</string>
 </resources>

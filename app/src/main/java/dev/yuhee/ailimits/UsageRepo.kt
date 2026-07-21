@@ -98,7 +98,7 @@ object UsageRepo {
         return snap
     }
 
-    /** History of short-window utilization: (timeMs, claudePct, codexPct), -1 = unknown. */
+    /** History of binding-window utilization: (timeMs, claudePct, codexPct), -1 = unknown. */
     fun history(ctx: Context): List<Triple<Long, Int, Int>> {
         val raw = Prefs.history(ctx) ?: return emptyList()
         return try {
@@ -111,7 +111,8 @@ object UsageRepo {
     }
 
     private fun appendHistory(ctx: Context, claude: ProviderState, codex: ProviderState, t: Long) {
-        fun pick(s: ProviderState): Int = s.windows.firstOrNull()?.pct ?: -1
+        // The fullest window is the one the widget shows, so it is the one worth tracking.
+        fun pick(s: ProviderState): Int = s.windows.maxByOrNull { it.pct }?.pct ?: -1
         val keep = history(ctx).filter { it.first >= t - 48 * 3600 * 1000L }.takeLast(199)
         val arr = JSONArray()
         (keep + Triple(t, pick(claude), pick(codex))).forEach { e ->

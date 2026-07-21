@@ -5,29 +5,63 @@ import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
-import android.os.Build
+import android.graphics.RectF
+import android.graphics.Shader
+import android.graphics.Typeface
 import android.view.View
 import android.widget.RemoteViews
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
 
+private fun blend(a: Int, b: Int, k: Float): Int {
+    val f = k.coerceIn(0f, 1f)
+    return Color.argb(
+        255,
+        (Color.red(a) + (Color.red(b) - Color.red(a)) * f).roundToInt(),
+        (Color.green(a) + (Color.green(b) - Color.green(a)) * f).roundToInt(),
+        (Color.blue(a) + (Color.blue(b) - Color.blue(a)) * f).roundToInt(),
+    )
+}
+
+/**
+ * Every widget style is drawn onto a bitmap rather than assembled from RemoteViews
+ * rows. RemoteViews cannot host custom views, so a Canvas is the only way to get
+ * real typography, rounded gradient bars, rings and sparklines — and it lets each
+ * widget instance lay itself out against the size the launcher actually gave it.
+ */
 object WidgetRenderer {
 
-    private val claudeRows = listOf(
-        intArrayOf(R.id.claude_row0, R.id.claude_label0, R.id.claude_bar0, R.id.claude_pct0, R.id.claude_reset0),
-        intArrayOf(R.id.claude_row1, R.id.claude_label1, R.id.claude_bar1, R.id.claude_pct1, R.id.claude_reset1),
-        intArrayOf(R.id.claude_row2, R.id.claude_label2, R.id.claude_bar2, R.id.claude_pct2, R.id.claude_reset2),
-    )
-    private val codexRows = listOf(
-        intArrayOf(R.id.codex_row0, R.id.codex_label0, R.id.codex_bar0, R.id.codex_pct0, R.id.codex_reset0),
-        intArrayOf(R.id.codex_row1, R.id.codex_label1, R.id.codex_bar1, R.id.codex_pct1, R.id.codex_reset1),
-    )
+    // -- tiers -------------------------------------------------------------
+    // Declared heights so the layout can guarantee a fit before it draws.
+    private const val H_FULL = 55f
+    private const val H_MED = 38f
+    private const val SPARK = 30f
+    private const val H_RICH = H_FULL + SPARK
+    private const val MIN_GAP = 10f
+    private const val FOOT = 15f
+
+    private const val RICH = 3
+    private const val FULL = 2
+    private const val MEDIUM = 1
+    private const val COMPACT = 0
+
+    private fun blockH(tier: Int) = when (tier) {
+        RICH -> H_RICH
+        FULL -> H_FULL
+        else -> H_MED
+    }
+
+    private fun padFor(tier: Int) = if (tier == MEDIUM) 11f else 13f
 
     private val providers = listOf(
         UsageWidgetProvider::class.java,
@@ -44,23 +78,105 @@ object WidgetRenderer {
     fun updateAll(ctx: Context, refreshing: Boolean = false) {
         val mgr = AppWidgetManager.getInstance(ctx)
         val snap = UsageRepo.load(ctx)
-        fun push(cls: Class<*>, build: () -> RemoteViews) {
-            val widgetIds = ids(ctx, cls)
-            if (widgetIds.isEmpty()) return
-            val rv = build()
-            widgetIds.forEach { mgr.updateAppWidget(it, rv) }
+        val hist = UsageRepo.history(ctx)
+        val theme = Theme(ctx)
+        // Sizes differ per instance, so each widget is rendered on its own.
+        providers.forEach { cls ->
+            ids(ctx, cls).forEach { id ->
+                runCatching {
+                    mgr.updateAppWidget(id, build(ctx, mgr, id, cls, snap, hist, theme, refreshing))
+                }
+            }
         }
-        push(UsageWidgetProvider::class.java) { buildFull(ctx, snap, refreshing) }
-        push(BarsWidgetProvider::class.java) { buildBars(ctx, snap) }
-        push(PercentWidgetProvider::class.java) { buildPercent(ctx, snap) }
-        push(GraphWidgetProvider::class.java) { buildGraph(ctx, snap, refreshing) }
     }
 
-    // --- pending intents ---
+    private fun build(
+        ctx: Context,
+        mgr: AppWidgetManager,
+        id: Int,
+        cls: Class<*>,
+        snap: Snapshot,
+        hist: List<Triple<Long, Int, Int>>,
+        t: Theme,
+        refreshing: Boolean,
+    ): RemoteViews {
+        val opts = mgr.getAppWidgetOptions(id)
+        val wDp = opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0)
+            .takeIf { it > 0 }?.toFloat() ?: 250f
+        val hDp = opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0)
+            .takeIf { it > 0 }?.toFloat() ?: 120f
+
+        val style = when (cls) {
+            BarsWidgetProvider::class.java -> Style.BARS
+            PercentWidgetProvider::class.java -> Style.RINGS
+            GraphWidgetProvider::class.java -> Style.GRAPH
+            else -> Style.DETAIL
+        }
+        val (bmp, footer) = render(ctx, style, wDp, hDp, snap, hist, refreshing, t)
+
+        val rv = RemoteViews(ctx.packageName, R.layout.widget_canvas)
+        rv.setImageViewBitmap(R.id.widget_canvas, bmp)
+        rv.setOnClickPendingIntent(R.id.widget_root, tapPI(ctx, snap))
+        // The "Open app" hit region only exists while the footer is actually drawn.
+        rv.setViewVisibility(R.id.widget_settings, if (footer) View.VISIBLE else View.GONE)
+        if (footer) rv.setOnClickPendingIntent(R.id.widget_settings, openAppPI(ctx, 3))
+        return rv
+    }
+
+    enum class Style { DETAIL, BARS, RINGS, GRAPH }
+
+    /**
+     * Draws one widget at a given dp size. Separate from [build] so tests can render
+     * the real thing to a bitmap without an AppWidgetManager.
+     *
+     * @return the bitmap and whether the footer (and its tap region) was drawn.
+     */
+    internal fun render(
+        ctx: Context,
+        style: Style,
+        wDp: Float,
+        hDp: Float,
+        snap: Snapshot,
+        hist: List<Triple<Long, Int, Int>>,
+        refreshing: Boolean = false,
+        theme: Theme? = null,
+    ): Pair<Bitmap, Boolean> {
+        val t = theme ?: Theme(ctx)
+        val scale = scaleFor(ctx, wDp, hDp)
+        val bmp = Bitmap.createBitmap(
+            max(1, (wDp * scale).roundToInt()),
+            max(1, (hDp * scale).roundToInt()),
+            Bitmap.Config.ARGB_8888,
+        )
+        val canvas = Canvas(bmp)
+        canvas.scale(scale, scale)
+        val pen = Pen(canvas, t)
+
+        var footer = false
+        when (style) {
+            Style.BARS -> drawBars(pen, wDp, hDp, snap, t)
+            Style.RINGS -> drawRings(pen, wDp, hDp, snap, t)
+            Style.GRAPH -> drawGraph(pen, wDp, hDp, snap, hist, t)
+            Style.DETAIL -> footer = drawDetail(pen, wDp, hDp, snap, hist, t, refreshing)
+        }
+        return bmp to footer
+    }
+
+    /** Keeps the bitmap crisp but well under the memory a RemoteViews update may carry. */
+    private fun scaleFor(ctx: Context, wDp: Float, hDp: Float): Float {
+        var s = ctx.resources.displayMetrics.density.coerceIn(1.5f, 3f)
+        while (wDp * s * hDp * s > 520_000f && s > 1.25f) s -= 0.25f
+        return s
+    }
+
+    // --- pending intents --------------------------------------------------
 
     private fun refreshPI(ctx: Context): PendingIntent {
-        val i = Intent(ctx, UsageWidgetProvider::class.java).setAction(UsageWidgetProvider.ACTION_MANUAL_REFRESH)
-        return PendingIntent.getBroadcast(ctx, 1, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val i = Intent(ctx, UsageWidgetProvider::class.java)
+            .setAction(UsageWidgetProvider.ACTION_MANUAL_REFRESH)
+        return PendingIntent.getBroadcast(
+            ctx, 1, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
     }
 
     private fun openAppPI(ctx: Context, rc: Int): PendingIntent =
@@ -72,196 +188,575 @@ object WidgetRenderer {
     private fun tapPI(ctx: Context, snap: Snapshot): PendingIntent =
         if (snap.claude.configured || snap.codex.configured) refreshPI(ctx) else openAppPI(ctx, 2)
 
-    // --- detail widget ---
+    // --- detail -----------------------------------------------------------
 
-    private fun buildFull(ctx: Context, snap: Snapshot, refreshing: Boolean): RemoteViews {
-        val rv = RemoteViews(ctx.packageName, R.layout.widget_usage)
+    /** @return true when the footer (and therefore its tap region) was drawn. */
+    private fun drawDetail(
+        g: Pen, w: Float, h: Float, snap: Snapshot,
+        hist: List<Triple<Long, Int, Int>>, t: Theme, refreshing: Boolean,
+    ): Boolean {
+        g.card(w, h)
+        var tier = COMPACT
+        for (candidate in intArrayOf(RICH, FULL, MEDIUM)) {
+            if (padFor(candidate) * 2 + blockH(candidate) * 2 + MIN_GAP <= h) { tier = candidate; break }
+        }
+        if (tier == COMPACT) { drawCompact(g, w, h, snap, t); return false }
 
-        bindProvider(ctx, rv, snap.claude, claudeRows, R.id.claude_status, ctx.getColor(R.color.claude))
-        bindProvider(ctx, rv, snap.codex, codexRows, R.id.codex_status, ctx.getColor(R.color.codex))
+        val pad = padFor(tier)
+        val x = pad
+        val cw = w - pad * 2
+        val bh = blockH(tier)
+        val slack = h - pad * 2 - bh * 2
+        val foot = slack >= MIN_GAP + FOOT
+        val gap = min(24f, slack - if (foot) FOOT else 0f)
+        val y = pad + if (foot) 0f else max(0f, (slack - gap) / 2f)
 
-        val anyError = snap.claude.error != null || snap.codex.error != null
-        val time = if (snap.fetchedAt > 0) SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(snap.fetchedAt)) else "--:--"
-        rv.setTextViewText(
-            R.id.footer_time,
-            when {
-                refreshing -> "updating…"
-                anyError -> "$time ⚠"
-                else -> "$time ↻"
-            }
-        )
+        drawBlock(g, x, y, cw, snap.claude, "Claude", t.claude, t, tier, hist.map { it.first to it.second })
+        g.line(x, y + bh + gap / 2f, cw, t.rule)
+        drawBlock(g, x, y + bh + gap, cw, snap.codex, "Codex", t.codex, t, tier, hist.map { it.first to it.third })
 
-        rv.setOnClickPendingIntent(R.id.widget_root, tapPI(ctx, snap))
-        rv.setOnClickPendingIntent(R.id.footer_gear, openAppPI(ctx, 3))
-        return rv
+        if (foot) {
+            val fy = h - pad - 1f
+            g.refreshIcon(x + 4f, fy - 4.5f, 4f, t.faint)
+            val stamp = if (refreshing) "updating…"
+            else if (snap.fetchedAt > 0) "updated " + clock(snap.fetchedAt) else "not updated yet"
+            g.text(stamp, x + 12f, fy - 1f, 9f, 500, t.faint)
+            g.text("Open app", x + cw, fy - 1f, 9f, 500, t.faint, Paint.Align.RIGHT)
+        } else if (snap.fetchedAt > 0 && System.currentTimeMillis() - snap.fetchedAt > 60 * 60_000L) {
+            // No room to spell out the timestamp — flag it only when it actually matters.
+            g.circle(w - 11f, 11f, 2.6f, t.warn)
+        }
+        return foot
     }
 
-    private fun bindProvider(
-        ctx: Context,
-        rv: RemoteViews,
-        state: ProviderState,
-        rows: List<IntArray>,
-        statusId: Int,
-        color: Int,
+    private fun drawBlock(
+        g: Pen, x: Float, y: Float, w: Float, st: ProviderState, name: String,
+        color: Int, t: Theme, tier: Int, series: List<Pair<Long, Int>>,
     ) {
-        if (state.windows.isEmpty()) {
-            rows.forEach { rv.setViewVisibility(it[0], View.GONE) }
-            rv.setViewVisibility(statusId, View.VISIBLE)
-            rv.setTextViewText(
-                statusId,
-                when {
-                    !state.configured -> "Sign in via app"
-                    state.error != null -> shortError(state.error)
-                    else -> "no data yet"
-                }
+        val med = tier == MEDIUM
+        val b = binding(st)
+
+        g.circle(x + 3.5f, y + 5.5f, 3.5f, if (st.configured) color else t.faint)
+        var cx = x + 12f
+        cx += g.text(name, cx, y + 9.5f, 11.5f, 700, if (st.configured) color else t.dim, tracking = .035f) + 6f
+        val plan = if (st.configured) prettyPlan(st.plan) else null
+        if (plan != null) cx += g.chip(plan, cx, y - 1.5f, color) + 6f
+
+        if (b == null) {
+            val msg = when {
+                !st.configured -> "Tap to sign in"
+                st.error != null -> shortError(st.error)
+                else -> "No data yet"
+            }
+            g.text(msg, x, y + if (med) 30f else 34f, if (med) 11f else 12f, 500,
+                if (st.error != null) t.warn else t.dim)
+            return
+        }
+
+        val sc = t.status(b.pct, color)
+        val proj = projection(b, series)
+        val head = if (proj != null) "on pace to cap " + clock(proj)
+        else "resets " + clock(b.resetsAt) + " · " + left(b.resetsAt) + " left"
+        val headWeight = if (proj != null) 600 else 500
+        val headColor = if (proj != null) t.warn else t.faint
+        // Medium carries the reset on its own meta line, so only the taller tiers
+        // put it in the header — otherwise it reads twice.
+        val wantHead = !med || proj != null
+        val headW = g.measure(head, 9.5f, headWeight)
+        val headInHeader = wantHead && headW <= x + w - cx
+        if (headInHeader) {
+            g.text(head, x + w, y + 9.5f, 9.5f, headWeight, headColor, Paint.Align.RIGHT)
+        }
+
+        if (med) {
+            val pw = g.text("${b.pct}%", x + w, y + 24f, 13.5f, 700, sc, Paint.Align.RIGHT)
+            g.bar(x, y + 15f, w - pw - 10f, 9f, b.pct, sc)
+            g.text(
+                shortWindow(b.label) + " · resets " + clock(b.resetsAt) + " · " + left(b.resetsAt) + " left",
+                x, y + 35f, 9f, 500, t.faint
             )
             return
         }
-        rv.setViewVisibility(statusId, View.GONE)
-        rows.forEachIndexed { i, rowIds ->
-            val win = state.windows.getOrNull(i)
-            if (win == null) {
-                rv.setViewVisibility(rowIds[0], View.GONE)
-            } else {
-                rv.setViewVisibility(rowIds[0], View.VISIBLE)
-                rv.setTextViewText(rowIds[1], win.label)
-                rv.setProgressBar(rowIds[2], 100, win.pct, false)
-                rv.setTextViewText(rowIds[3], "${win.pct}%")
-                rv.setTextViewText(rowIds[4], fmtReset(win.resetsAt))
-                if (Build.VERSION.SDK_INT >= 31) {
-                    val c = if (win.pct >= 90) ctx.getColor(R.color.red) else color
-                    rv.setColorStateList(rowIds[2], "setProgressTintList", ColorStateList.valueOf(c))
+
+        // Hero: big number with the bar alongside it — stacking it wasted the width.
+        val nw = g.text("${b.pct}", x, y + 37f, 29f, 700, sc, tracking = -.017f)
+        g.text("%", x + nw + 2f, y + 37f, 12.5f, 700, sc)
+        val bx = x + nw + 21f
+        g.bar(bx, y + 23f, x + w - bx, 10f, b.pct, sc)
+
+        val my = y + 43f
+        val lw = g.text(windowName(b.label), x, my + 8f, 9.5f, 500, t.dim, tracking = .02f)
+        val room = w - lw - 14f
+        if (wantHead && !headInHeader && headW <= room) {
+            // A wide plan chip crowded the header out; when it comes to it, knowing
+            // when the limit lifts beats listing the other windows.
+            g.text(head, x + w, my + 8f, 9.5f, headWeight, headColor, Paint.Align.RIGHT)
+        } else {
+            drawSecondary(g, x + w, my + 8f, room, st.windows.filter { it !== b }, color, t)
+        }
+
+        if (tier == RICH) sparkline(g, x, y + H_FULL + 2f, w, SPARK - 6f, series, color, t)
+    }
+
+    /** Right-aligned group of the non-binding windows; degrades until it fits. */
+    private fun drawSecondary(
+        g: Pen, rightX: Float, baseY: Float, maxW: Float, rest: List<Win>, color: Int, t: Theme,
+    ) {
+        if (rest.isEmpty() || maxW < 40f) return
+        fun width(items: List<Win>, withBar: Boolean): Float =
+            items.sumOf {
+                (g.measure(it.label, 9f, 600, .02f) + (if (withBar) 22f else 0f) + 4f +
+                    g.measure("${it.pct}%", 9.5f, 700)).toDouble()
+            }.toFloat() + (items.size - 1) * 11f
+
+        for (withBar in booleanArrayOf(true, false)) {
+            for (n in rest.size downTo 1) {
+                val items = rest.take(n)
+                if (width(items, withBar) > maxW) continue
+                var rx = rightX
+                items.reversed().forEach { v ->
+                    rx -= g.text("${v.pct}%", rx, baseY, 9.5f, 700, t.text, Paint.Align.RIGHT) + 4f
+                    if (withBar) {
+                        g.bar(rx - 18f, baseY - 5.5f, 18f, 4.5f, v.pct, t.status(v.pct, color))
+                        rx -= 22f
+                    }
+                    rx -= g.text(v.label, rx, baseY, 9f, 600, t.dim, Paint.Align.RIGHT, .02f) + 11f
+                }
+                return
+            }
+        }
+    }
+
+    /** Compact: both providers side by side, one glance each. */
+    private fun drawCompact(g: Pen, w: Float, h: Float, snap: Snapshot, t: Theme) {
+        val pad = 13f
+        val colW = (w - pad * 2 - 16f) / 2f
+        listOf(
+            Triple(snap.claude, "Claude", t.claude),
+            Triple(snap.codex, "Codex", t.codex),
+        ).forEachIndexed { i, (st, name, color) ->
+            val x = pad + i * (colW + 16f)
+            val b = binding(st)
+            val sc = if (b != null) t.status(b.pct, color) else t.faint
+            val cy = h / 2f
+            g.circle(x + 3.5f, cy - 10f, 3.5f, if (st.configured) color else t.faint)
+            g.text(name, x + 12f, cy - 6.5f, 10f, 700, if (st.configured) color else t.dim, tracking = .03f)
+            g.text(if (b != null) "${b.pct}%" else "--", x + colW, cy - 6.5f, 12.5f, 700, sc, Paint.Align.RIGHT)
+            g.bar(x, cy, colW, 8f, b?.pct ?: 0, sc)
+            g.text(
+                if (b != null) shortWindow(b.label) + " · " + left(b.resetsAt) + " left" else "tap to sign in",
+                x, cy + 18f, 8.5f, 500, t.faint
+            )
+        }
+    }
+
+    /** Trend of the binding window over the last 12h. No axes — shape only. */
+    private fun sparkline(
+        g: Pen, x: Float, y: Float, w: Float, h: Float,
+        series: List<Pair<Long, Int>>, color: Int, t: Theme,
+    ) {
+        val now = System.currentTimeMillis()
+        val span = 12 * 3600_000L
+        val pts = series.filter { it.first >= now - span && it.second >= 0 }
+        if (pts.size < 2) return
+        // Scale to the data's own range so a flat-but-high series still shows shape.
+        val lo = max(0f, (pts.minOf { it.second } - 4).toFloat())
+        val hi = max(lo + 8f, (pts.maxOf { it.second } + 4).toFloat())
+        fun px(ms: Long) = x + (ms - (now - span)).toFloat() / span * w
+        fun py(v: Int) = y + h - (v.toFloat().coerceIn(lo, hi) - lo) / (hi - lo) * h
+
+        val area = Path().apply {
+            moveTo(px(pts.first().first), y + h)
+            pts.forEach { lineTo(px(it.first), py(it.second)) }
+            lineTo(px(pts.last().first), y + h)
+            close()
+        }
+        val line = Path().apply {
+            pts.forEachIndexed { i, p -> if (i == 0) moveTo(px(p.first), py(p.second)) else lineTo(px(p.first), py(p.second)) }
+        }
+        g.clipped(x, y, w, h, 4f) {
+            g.path(area, LinearGradient(0f, y, 0f, y + h,
+                blend(color, t.bg, .5f), blend(color, t.bg, .94f), Shader.TileMode.CLAMP))
+            g.stroke(line, color, 1.7f)
+        }
+        val last = pts.last()
+        g.circle(min(px(last.first), x + w - 2f), py(last.second), 2.4f, color)
+    }
+
+    // --- rings ------------------------------------------------------------
+
+    private fun drawRings(g: Pen, w: Float, h: Float, snap: Snapshot, t: Theme) {
+        g.card(w, h)
+        val r = min((w / 2f - 34f) / 2f, (h - 52f) / 2f).coerceAtLeast(12f)
+        listOf(
+            Triple(snap.claude, "CLAUDE", t.claude),
+            Triple(snap.codex, "CODEX", t.codex),
+        ).forEachIndexed { i, (st, name, color) ->
+            val cx = w * (if (i == 1) .73f else .27f)
+            val cy = (h - 26f) / 2f + 4f
+            val b = binding(st)
+            val th = max(5f, r * .26f)
+            g.arc(cx, cy, r, 135f, 270f, t.track, th)
+            if (b != null && b.pct > 0) {
+                g.arc(cx, cy, r, 135f, 270f * b.pct.coerceIn(0, 100) / 100f, t.status(b.pct, color), th)
+            }
+            val ns = r * .62f
+            val label = if (b != null) "${b.pct}" else "--"
+            val nw = g.measure(label, ns, 700, -.017f)
+            val pw = if (b != null) g.measure("%", r * .26f, 700) else 0f
+            val off = (nw + pw + 1.5f) / 2f
+            val c = if (b != null) t.status(b.pct, color) else t.faint
+            g.text(label, cx - off, cy + ns * .34f, ns, 700, c, tracking = -.017f)
+            if (b != null) g.text("%", cx - off + nw + 1.5f, cy + ns * .34f, r * .26f, 700, c)
+            g.text(name, cx, cy + r + 11f, 9f, 700, t.dim, Paint.Align.CENTER, .05f)
+            g.text(
+                if (b != null) left(b.resetsAt) + " left" else "tap to sign in",
+                cx, cy + r + 22f, 8.5f, 500, t.faint, Paint.Align.CENTER
+            )
+        }
+    }
+
+    // --- slim bars --------------------------------------------------------
+
+    private fun drawBars(g: Pen, w: Float, h: Float, snap: Snapshot, t: Theme) {
+        g.card(w, h)
+        val pad = 14f
+        val cw = w - pad * 2
+        listOf(
+            Triple(snap.claude, "Claude", t.claude),
+            Triple(snap.codex, "Codex", t.codex),
+        ).forEachIndexed { i, (st, name, color) ->
+            val y = h / 2f - 18f + i * 23f
+            val b = binding(st)
+            val sc = if (b != null) t.status(b.pct, color) else t.faint
+            g.circle(pad + 3f, y + 5f, 3f, if (st.configured) color else t.faint)
+            g.text(name, pad + 11f, y + 8.5f, 9.5f, 700, if (st.configured) color else t.dim, tracking = .03f)
+            val lx = pad + 54f
+            val rw = max(20f, cw - 54f - 74f)
+            g.bar(lx, y + 2f, rw, 8f, b?.pct ?: 0, sc)
+            g.text(if (b != null) "${b.pct}%" else "--", lx + rw + 32f, y + 8.5f, 11f, 700, t.text, Paint.Align.RIGHT)
+            g.text(if (b != null) left(b.resetsAt) else "—", pad + cw, y + 8.5f, 8.5f, 500, t.faint, Paint.Align.RIGHT)
+        }
+    }
+
+    // --- 24h history ------------------------------------------------------
+
+    private fun drawGraph(
+        g: Pen, w: Float, h: Float, snap: Snapshot,
+        hist: List<Triple<Long, Int, Int>>, t: Theme,
+    ) {
+        g.card(w, h)
+        val padL = 14f; val padR = 32f; val padT = 27f; val padB = 17f
+        val gx = padL; val gy = padT
+        val gw = max(20f, w - padL - padR)
+        val gh = max(20f, h - padT - padB)
+        val now = System.currentTimeMillis()
+        val span = 24 * 3600_000L
+        val t0 = now - span
+
+        g.text("Last 24 hours", padL, 17f, 10f, 700, t.text, tracking = .03f)
+        var lx = w - padR
+        listOf(Triple(t.codex, "Codex", snap.codex), Triple(t.claude, "Claude", snap.claude))
+            .forEach { (c, n, st) ->
+                val b = binding(st)
+                val s = if (b != null) "$n ${b.pct}%" else n
+                val tw = g.measure(s, 9f, 600, .02f)
+                g.text(s, lx, 17f, 9f, 600, c, Paint.Align.RIGHT, .02f)
+                g.circle(lx - tw - 7f, 13.5f, 2.6f, c)
+                lx -= tw + 17f
+            }
+
+        intArrayOf(0, 50, 100).forEach { v ->
+            val y = gy + (100 - v) / 100f * gh
+            g.line(gx, y, gw, t.rule)
+            g.text("$v%", gx + gw + 5f, y + 3.2f, 8.5f, 500, t.faint)
+        }
+        g.text("24h ago", gx, h - 6f, 8.5f, 500, t.faint)
+        g.text("12h", gx + gw / 2f, h - 6f, 8.5f, 500, t.faint, Paint.Align.CENTER)
+        g.text("now", gx + gw, h - 6f, 8.5f, 500, t.faint, Paint.Align.RIGHT)
+
+        fun px(ms: Long) = gx + (ms - t0).toFloat() / span * gw
+        fun py(v: Int) = gy + (100 - v.coerceIn(0, 100)) / 100f * gh
+
+        // Taller series first so the shorter one stays visible on top.
+        val series = listOf(
+            t.claude to hist.map { it.first to it.second },
+            t.codex to hist.map { it.first to it.third },
+        ).map { (c, pts) -> c to pts.filter { it.first >= t0 && it.second >= 0 } }
+            .filter { it.second.size >= 2 }
+            .sortedByDescending { it.second.last().second }
+
+        if (series.isEmpty()) {
+            g.text("Collecting history…", gx + gw / 2f, gy + gh / 2f + 4f, 11f, 500, t.faint, Paint.Align.CENTER)
+            return
+        }
+        series.forEach { (c, pts) ->
+            val area = Path().apply {
+                moveTo(px(pts.first().first), py(0))
+                pts.forEach { lineTo(px(it.first), py(it.second)) }
+                lineTo(px(pts.last().first), py(0))
+                close()
+            }
+            val line = Path().apply {
+                pts.forEachIndexed { i, p ->
+                    if (i == 0) moveTo(px(p.first), py(p.second)) else lineTo(px(p.first), py(p.second))
                 }
             }
+            g.path(area, LinearGradient(0f, gy, 0f, gy + gh,
+                blend(c, t.bg, .58f), blend(c, t.bg, .96f), Shader.TileMode.CLAMP))
+            g.stroke(line, c, 2f)
+            val last = pts.last()
+            g.circle(px(last.first), py(last.second), 5.4f, t.bg)
+            g.circle(px(last.first), py(last.second), 3.2f, c)
         }
     }
 
-    // --- slim bars widget ---
-
-    private fun buildBars(ctx: Context, snap: Snapshot): RemoteViews {
-        val rv = RemoteViews(ctx.packageName, R.layout.widget_bars)
-        fun bind(state: ProviderState, barId: Int, pctId: Int, color: Int) {
-            val w = binding(state)
-            rv.setProgressBar(barId, 100, w?.pct ?: 0, false)
-            rv.setTextViewText(pctId, if (w != null) "${w.pct}%" else "--")
-            if (Build.VERSION.SDK_INT >= 31 && w != null) {
-                val c = if (w.pct >= 90) ctx.getColor(R.color.red) else color
-                rv.setColorStateList(barId, "setProgressTintList", ColorStateList.valueOf(c))
-            }
-        }
-        bind(snap.claude, R.id.bars_bar_c, R.id.bars_pct_c, ctx.getColor(R.color.claude))
-        bind(snap.codex, R.id.bars_bar_x, R.id.bars_pct_x, ctx.getColor(R.color.codex))
-        rv.setOnClickPendingIntent(R.id.widget_root, tapPI(ctx, snap))
-        return rv
-    }
-
-    // --- percent widget ---
-
-    private fun buildPercent(ctx: Context, snap: Snapshot): RemoteViews {
-        val rv = RemoteViews(ctx.packageName, R.layout.widget_percent)
-        fun bind(state: ProviderState, pctId: Int, subId: Int, name: String, color: Int) {
-            val w = binding(state)
-            if (w == null) {
-                rv.setTextViewText(pctId, "--")
-                rv.setTextViewText(subId, name)
-            } else {
-                rv.setTextViewText(pctId, "${w.pct}%")
-                rv.setTextViewText(subId, "$name · ${w.label} ${fmtReset(w.resetsAt)}")
-                rv.setTextColor(pctId, if (w.pct >= 90) ctx.getColor(R.color.red) else color)
-            }
-        }
-        bind(snap.claude, R.id.pc_cl, R.id.pc_cl_sub, "Claude", ctx.getColor(R.color.claude))
-        bind(snap.codex, R.id.pc_cx, R.id.pc_cx_sub, "Codex", ctx.getColor(R.color.codex))
-        rv.setOnClickPendingIntent(R.id.widget_root, tapPI(ctx, snap))
-        return rv
-    }
+    // --- data helpers -----------------------------------------------------
 
     /** The binding constraint: the fullest window is what actually limits you. */
     private fun binding(state: ProviderState): Win? = state.windows.maxByOrNull { it.pct }
 
-    // --- 24h graph widget ---
-
-    private fun buildGraph(ctx: Context, snap: Snapshot, refreshing: Boolean): RemoteViews {
-        val rv = RemoteViews(ctx.packageName, R.layout.widget_graph)
-        rv.setImageViewBitmap(R.id.graph_img, drawGraph(ctx))
-        val time = if (snap.fetchedAt > 0) SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(snap.fetchedAt)) else "--:--"
-        rv.setTextViewText(R.id.graph_time, if (refreshing) "updating…" else "$time ↻")
-        rv.setOnClickPendingIntent(R.id.widget_root, tapPI(ctx, snap))
-        return rv
+    /**
+     * Linear burn over recent history projected forward to 100%. Null unless the
+     * window would realistically cap before it resets.
+     */
+    private fun projection(b: Win, series: List<Pair<Long, Int>>): Long? {
+        val now = System.currentTimeMillis()
+        val pts = series.filter { it.first >= now - 110 * 60_000L && it.second >= 0 }
+        if (pts.size < 3) return null
+        val first = pts.first()
+        val last = pts.last()
+        val hours = (last.first - first.first) / 3600_000f
+        if (hours <= .25f) return null
+        val rate = (last.second - first.second) / hours
+        if (rate <= 2.5f) return null
+        val at = now + ((100 - last.second) / rate * 3600_000f).toLong()
+        if (b.resetsAt > 0 && at >= b.resetsAt) return null
+        return at
     }
 
-    private fun drawGraph(ctx: Context): Bitmap {
-        val w = 800
-        val h = 320
-        val pad = 14f
-        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bmp)
-        val now = System.currentTimeMillis()
-        val spanMs = 24 * 3600 * 1000L
-        val hist = UsageRepo.history(ctx).filter { it.first >= now - spanMs }
+    private fun clock(ms: Long): String =
+        if (ms <= 0) "--:--" else SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ms))
 
-        val grid = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = ctx.getColor(R.color.track)
-            strokeWidth = 2f
+    /** Time until reset: "25m", "3h 40m", "2d 5h". */
+    fun left(ms: Long): String {
+        if (ms <= 0) return "—"
+        val diff = ms - System.currentTimeMillis()
+        if (diff <= 0) return "now"
+        val m = diff / 60_000
+        return when {
+            m < 60 -> "${m}m"
+            m < 24 * 60 -> "${m / 60}h ${m % 60}m"
+            else -> "${m / (24 * 60)}d ${m % (24 * 60) / 60}h"
         }
-        for (v in intArrayOf(0, 50, 100)) {
-            val y = pad + (100 - v) / 100f * (h - 2 * pad)
-            canvas.drawLine(pad, y, w - pad, y, grid)
-        }
+    }
 
-        fun x(t: Long) = pad + (t - (now - spanMs)).toFloat() / spanMs * (w - 2 * pad)
-        fun y(pct: Int) = pad + (100 - pct.coerceIn(0, 100)) / 100f * (h - 2 * pad)
-
-        var drewAny = false
-        fun series(pick: (Triple<Long, Int, Int>) -> Int, color: Int) {
-            val pts = hist.mapNotNull { e -> pick(e).takeIf { it >= 0 }?.let { Pair(e.first, it) } }
-            if (pts.size < 2) return
-            drewAny = true
-            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                this.color = color
-                strokeWidth = 5f
-                style = Paint.Style.STROKE
-                strokeCap = Paint.Cap.ROUND
-                strokeJoin = Paint.Join.ROUND
-            }
-            val path = Path()
-            pts.forEachIndexed { i, (t, p) ->
-                if (i == 0) path.moveTo(x(t), y(p)) else path.lineTo(x(t), y(p))
-            }
-            canvas.drawPath(path, paint)
-            val last = pts.last()
-            canvas.drawCircle(x(last.first), y(last.second), 7f, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color })
+    /** The old widget showed a bare "5h" / "7d". Say what it means. */
+    fun windowName(label: String): String {
+        Regex("^(\\d+)([hd])$").find(label.lowercase())?.let { m ->
+            val n = m.groupValues[1]
+            return if (m.groupValues[2] == "h") "$n-hour window" else "$n-day window"
         }
-        series({ it.second }, ctx.getColor(R.color.claude))
-        series({ it.third }, ctx.getColor(R.color.codex))
-
-        if (!drewAny) {
-            val txt = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = ctx.getColor(R.color.text2)
-                textSize = 30f
-                textAlign = Paint.Align.CENTER
-            }
-            canvas.drawText("collecting history…", w / 2f, h / 2f + 10f, txt)
+        return when (label.lowercase()) {
+            "weekly" -> "weekly window"
+            "primary" -> "5-hour window"
+            "now" -> "current window"
+            else -> "$label · 7-day"
         }
-        return bmp
+    }
+
+    private fun shortWindow(label: String) = windowName(label).removeSuffix(" window")
+
+    /** "plus" -> "Plus", "chatgpt_pro" -> "ChatGPT Pro". */
+    private fun prettyPlan(plan: String?): String? {
+        val p = plan?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return p.split('_', '-', ' ').filter { it.isNotEmpty() }.joinToString(" ") { word ->
+            if (word.equals("chatgpt", true)) "ChatGPT"
+            else word.replaceFirstChar { it.uppercase() }
+        }
     }
 
     private fun shortError(e: String): String = when {
-        e.contains("sign in", ignoreCase = true) || e.contains("expired", ignoreCase = true) -> "re-auth in app"
-        e.contains("429") -> "rate limited"
-        else -> "update failed"
+        e.contains("sign in", true) || e.contains("expired", true) -> "Sign-in expired"
+        e.contains("429") -> "Rate limited"
+        else -> "Update failed"
     }
 
-    /** Relative time until reset: "↻3h40m", "↻2d5h", "↻25m". */
-    fun fmtReset(ms: Long): String {
-        if (ms <= 0) return ""
-        val diff = ms - System.currentTimeMillis()
-        if (diff <= 0) return "↻now"
-        val m = diff / 60000
-        return when {
-            m < 60 -> "↻${m}m"
-            m < 24 * 60 -> "↻${m / 60}h${m % 60}m"
-            else -> "↻${m / (24 * 60)}d${m % (24 * 60) / 60}h"
+    // --- theme ------------------------------------------------------------
+
+    internal class Theme(ctx: Context) {
+        val bg = ctx.getColor(R.color.widget_bg)
+        val stroke = ctx.getColor(R.color.widget_stroke)
+        val text = ctx.getColor(R.color.text)
+        val dim = ctx.getColor(R.color.text2)
+        val faint = ctx.getColor(R.color.text3)
+        val track = ctx.getColor(R.color.track)
+        val rule = ctx.getColor(R.color.rule)
+        val claude = ctx.getColor(R.color.claude)
+        val codex = ctx.getColor(R.color.codex)
+        val warn = ctx.getColor(R.color.warn)
+        val red = ctx.getColor(R.color.red)
+        val chipBg = ctx.getColor(R.color.chip_bg)
+
+        /** Provider identity colour until the number starts to matter, then amber, then red. */
+        fun status(pct: Int, base: Int) = when {
+            pct >= 90 -> red
+            pct >= 75 -> warn
+            else -> base
+        }
+    }
+
+    // --- canvas primitives ------------------------------------------------
+
+    private class Pen(val c: Canvas, val t: Theme) {
+        private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { fontFeatureSettings = "tnum" }
+        private val r = RectF()
+
+        private fun face(weight: Int): Typeface = when {
+            weight >= 700 -> BOLD
+            weight >= 600 -> MEDIUM
+            else -> REGULAR
+        }
+
+        fun text(
+            s: String, x: Float, y: Float, size: Float, weight: Int, color: Int,
+            align: Paint.Align = Paint.Align.LEFT, tracking: Float = 0f,
+        ): Float {
+            p.shader = null
+            p.style = Paint.Style.FILL
+            p.typeface = face(weight)
+            p.textSize = size
+            p.color = color
+            p.textAlign = align
+            p.letterSpacing = tracking
+            c.drawText(s, x, y, p)
+            return p.measureText(s)
+        }
+
+        fun measure(s: String, size: Float, weight: Int, tracking: Float = 0f): Float {
+            p.typeface = face(weight)
+            p.textSize = size
+            p.letterSpacing = tracking
+            return p.measureText(s)
+        }
+
+        fun rrect(x: Float, y: Float, w: Float, h: Float, radius: Float, color: Int, shader: Shader? = null) {
+            if (w <= 0f || h <= 0f) return
+            r.set(x, y, x + w, y + h)
+            p.style = Paint.Style.FILL
+            p.shader = shader
+            p.color = color
+            p.letterSpacing = 0f
+            val rad = min(radius, min(w, h) / 2f)
+            c.drawRoundRect(r, rad, rad, p)
+            p.shader = null
+        }
+
+        fun card(w: Float, h: Float) {
+            rrect(0f, 0f, w, h, 22f, t.bg)
+            r.set(.5f, .5f, w - .5f, h - .5f)
+            p.style = Paint.Style.STROKE
+            p.strokeWidth = 1f
+            p.color = t.stroke
+            p.shader = null
+            c.drawRoundRect(r, 21.5f, 21.5f, p)
+            p.style = Paint.Style.FILL
+        }
+
+        fun bar(x: Float, y: Float, w: Float, h: Float, pct: Int, color: Int) {
+            if (w <= 0f) return
+            rrect(x, y, w, h, h / 2f, t.track)
+            val f = pct.coerceIn(0, 100) / 100f
+            if (f <= 0f) return
+            val fw = max(h, w * f)
+            rrect(x, y, fw, h, h / 2f, color,
+                LinearGradient(x, 0f, x + fw, 0f, blend(color, Color.WHITE, .24f), color, Shader.TileMode.CLAMP))
+        }
+
+        fun chip(s: String, x: Float, y: Float, color: Int?): Float {
+            val h = 12.5f
+            val w = measure(s, 8.5f, 700, .035f) + 9f
+            rrect(x, y, w, h, h / 2f, if (color != null) blend(color, t.bg, .74f) else t.chipBg)
+            text(s, x + 4.5f, y + h - 4f, 8.5f, 700, color ?: t.dim, tracking = .035f)
+            return w
+        }
+
+        fun circle(cx: Float, cy: Float, radius: Float, color: Int) {
+            p.style = Paint.Style.FILL
+            p.shader = null
+            p.color = color
+            c.drawCircle(cx, cy, radius, p)
+        }
+
+        fun line(x: Float, y: Float, w: Float, color: Int) {
+            p.style = Paint.Style.FILL
+            p.shader = null
+            p.color = color
+            c.drawRect(x, y - .5f, x + w, y + .5f, p)
+        }
+
+        fun arc(cx: Float, cy: Float, radius: Float, start: Float, sweep: Float, color: Int, width: Float) {
+            if (sweep <= 0f) return
+            r.set(cx - radius, cy - radius, cx + radius, cy + radius)
+            p.style = Paint.Style.STROKE
+            p.shader = null
+            p.color = color
+            p.strokeWidth = width
+            p.strokeCap = Paint.Cap.ROUND
+            c.drawArc(r, start, sweep, false, p)
+            p.style = Paint.Style.FILL
+        }
+
+        fun path(path: Path, shader: Shader) {
+            p.style = Paint.Style.FILL
+            p.shader = shader
+            p.color = Color.WHITE
+            c.drawPath(path, p)
+            p.shader = null
+        }
+
+        fun stroke(path: Path, color: Int, width: Float) {
+            p.style = Paint.Style.STROKE
+            p.shader = null
+            p.color = color
+            p.strokeWidth = width
+            p.strokeCap = Paint.Cap.ROUND
+            p.strokeJoin = Paint.Join.ROUND
+            c.drawPath(path, p)
+            p.style = Paint.Style.FILL
+        }
+
+        fun clipped(x: Float, y: Float, w: Float, h: Float, radius: Float, body: () -> Unit) {
+            c.save()
+            val clip = Path().apply { addRoundRect(RectF(x, y, x + w, y + h), radius, radius, Path.Direction.CW) }
+            c.clipPath(clip)
+            body()
+            c.restore()
+        }
+
+        /** Small circular-arrow mark — drawn, not a text glyph. */
+        fun refreshIcon(cx: Float, cy: Float, radius: Float, color: Int) {
+            r.set(cx - radius, cy - radius, cx + radius, cy + radius)
+            p.style = Paint.Style.STROKE
+            p.shader = null
+            p.color = color
+            p.strokeWidth = 1.3f
+            p.strokeCap = Paint.Cap.ROUND
+            c.drawArc(r, -30f, 285f, false, p)
+            p.style = Paint.Style.FILL
+            val head = Path().apply {
+                moveTo(cx + radius - 1.8f, cy - radius * .5f - 1.5f)
+                lineTo(cx + radius + 1.6f, cy - radius * .5f - .4f)
+                lineTo(cx + radius - 1f, cy - radius * .5f + 2.1f)
+                close()
+            }
+            c.drawPath(head, p)
+        }
+
+        companion object {
+            val BOLD: Typeface = Typeface.create("sans-serif", Typeface.BOLD)
+            val MEDIUM: Typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            val REGULAR: Typeface = Typeface.create("sans-serif", Typeface.NORMAL)
         }
     }
 }

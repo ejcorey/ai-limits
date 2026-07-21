@@ -5,11 +5,15 @@
     <color name="card">#202020</color>
     <color name="text">#ECEAE5</color>
     <color name="text2">#9A9A9A</color>
-    <color name="track">#2E2E2E</color>
+    <color name="text3">#57FFFFFF</color>
+    <color name="track">#1CFFFFFF</color>
+    <color name="rule">#12FFFFFF</color>
+    <color name="chip_bg">#14FFFFFF</color>
     <color name="claude">#D97757</color>
     <color name="codex">#19C37D</color>
+    <color name="warn">#E5A34D</color>
     <color name="red">#E5484D</color>
     <color name="icon_bg">#171314</color>
-    <color name="widget_bg">#F2181818</color>
-    <color name="widget_stroke">#22FFFFFF</color>
+    <color name="widget_bg">#181818</color>
+    <color name="widget_stroke">#1AFFFFFF</color>
 </resources>
