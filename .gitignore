@@ -5,3 +5,5 @@ keystore.jks
 *.apk
 .idea/
 *.iml
+
+.kotlin/
