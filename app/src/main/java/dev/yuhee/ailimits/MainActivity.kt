@@ -135,6 +135,16 @@ class MainActivity : AppCompatActivity() {
     private fun setUpAppearance() {
         syncProviderSwitches()
 
+        // Gemini plan label: saved when focus leaves the field, then pushed to the widget.
+        val planField = findViewById<EditText>(R.id.etGeminiPlan)
+        planField.setText(Settings.geminiPlan(this) ?: "")
+        planField.setOnFocusChangeListener { _, hasFocus ->
+            if (!hasFocus) {
+                Settings.setGeminiPlan(this, planField.text.toString())
+                applyWidgetChange()
+            }
+        }
+
         val themes = ThemeMode.entries
         spinner(R.id.spinnerTheme, themes.map { it.label }, themes.indexOf(Settings.themeMode(this))) { pos ->
             if (themes[pos] != Settings.themeMode(this)) {
@@ -173,6 +183,12 @@ class MainActivity : AppCompatActivity() {
         switch(R.id.swShowCodex, Settings.showCodex(this)) { on ->
             Settings.setShowCodex(this, on); syncProviderSwitches(); applyWidgetChange()
         }
+        switch(R.id.swShowGemini, Settings.showGemini(this)) { on ->
+            Settings.setShowGemini(this, on); syncProviderSwitches(); applyWidgetChange()
+        }
+        val gem = Settings.showGemini(this)
+        findViewById<TextView>(R.id.geminiHint).visibility = if (gem) View.VISIBLE else View.GONE
+        findViewById<EditText>(R.id.etGeminiPlan).visibility = if (gem) View.VISIBLE else View.GONE
         findViewById<TextView>(R.id.soloHint).visibility =
             if (Settings.solo(this)) View.VISIBLE else View.GONE
     }

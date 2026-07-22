@@ -34,7 +34,7 @@ Four styles, all drawn on a canvas so they scale properly instead of clipping:
 
 All of these change the widgets immediately, with a live preview in the app:
 
-- **Which providers to show.** Hide one and the other gets a roomier layout — every window on its own row instead of squeezed into chips.
+- **Which providers to show** — Claude, Codex, and optionally **Gemini**. With one provider on, it gets a roomier layout (a full row per window); with three, the widget lays out three panels. Hidden by default, Gemini is opt-in because Google publishes no usage-limit API, so its card shows presence and an optional plan label rather than a live percentage.
 - **Theme** — follow the system, or force dark/light regardless of it.
 - **Background opacity**, 40–100%, for translucency over the wallpaper.
 - **Burn-projection warning** and **trend sparklines** can each be turned off.
@@ -46,6 +46,8 @@ All of these change the widgets immediately, with a live preview in the app:
 
 - **Claude**: 5-hour window, 7-day window, plus Opus/Sonnet 7-day windows when present.
 - **Codex**: primary (≈5 h) and weekly windows, plus the plan type as a chip.
+- **Gemini** (optional): a presence card with your plan label. Google exposes no usage-limit endpoint, so no percentage is shown or invented.
+- **Aligned across providers**: every bar starts at a shared column and the type is sized for a large phone, so two or three panels read as one even grid. Widgets resize across the full One UI cell range and degrade gracefully when narrow (dropping the least important element rather than clipping).
 - **The binding window** — whichever is fullest — is the headline number, because that is the one that will actually stop you.
 - **"USED" prefixes every headline number**, and a companion "N% left" is shown, so there is no confusion between how much is spent and how much remains.
 - **Burn rate**: how fast the binding window is climbing right now, in points per hour ("burning 6%/hr", "holding steady", "easing off"), read from recent history.

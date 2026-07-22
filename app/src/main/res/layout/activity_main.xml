@@ -267,6 +267,35 @@
                 android:layout_height="wrap_content"
                 android:text="Show Codex" />
 
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/swShowGemini"
+                style="@style/Row"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Show Gemini" />
+
+            <TextView
+                android:id="@+id/geminiHint"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Google publishes no usage-limit API for Gemini, so its card shows presence and plan only — no live percentage."
+                android:textColor="@color/text2"
+                android:textSize="11sp"
+                android:visibility="gone" />
+
+            <EditText
+                android:id="@+id/etGeminiPlan"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:hint="Gemini plan label (optional, e.g. AI Pro)"
+                android:inputType="textCapWords"
+                android:maxLines="1"
+                android:textColor="@color/text"
+                android:textColorHint="@color/text2"
+                android:textSize="14sp"
+                android:visibility="gone" />
+
             <TextView
                 android:id="@+id/soloHint"
                 android:layout_width="match_parent"

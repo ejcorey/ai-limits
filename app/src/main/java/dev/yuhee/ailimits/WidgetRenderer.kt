@@ -49,16 +49,20 @@ object WidgetRenderer {
     data class Opts(
         val showClaude: Boolean = true,
         val showCodex: Boolean = true,
+        val showGemini: Boolean = false,
         val opacity: Int = 100,
         val projection: Boolean = true,
         val sparkline: Boolean = true,
     ) {
-        val solo: Boolean get() = showClaude != showCodex
+        val shown: Int get() =
+            (if (showClaude) 1 else 0) + (if (showCodex) 1 else 0) + (if (showGemini) 1 else 0)
+        val solo: Boolean get() = shown == 1
     }
 
     fun optsFrom(ctx: Context) = Opts(
         showClaude = Settings.showClaude(ctx),
         showCodex = Settings.showCodex(ctx),
+        showGemini = Settings.showGemini(ctx),
         opacity = Settings.opacity(ctx),
         projection = Settings.showProjection(ctx),
         sparkline = Settings.showSparkline(ctx),
@@ -66,12 +70,14 @@ object WidgetRenderer {
 
     // -- tiers -------------------------------------------------------------
     // Declared heights so the layout can guarantee a fit before it draws.
-    private const val H_FULL = 55f
-    private const val H_MED = 38f
-    private const val SPARK = 30f
+    // Sized for a Galaxy S24 Ultra: physically large widgets, so the type runs
+    // bigger than a phone-generic default and the tiers claim a little more height.
+    private const val H_FULL = 64f
+    private const val H_MED = 44f
+    private const val SPARK = 34f
     private const val H_RICH = H_FULL + SPARK
     private const val MIN_GAP = 10f
-    private const val FOOT = 15f
+    private const val FOOT = 16f
 
     private const val RICH = 3
     private const val FULL = 2
@@ -238,6 +244,9 @@ object WidgetRenderer {
     ): List<Panel> = buildList {
         if (o.showClaude) add(Panel(snap.claude, "Claude", t.claude, hist.map { it.first to it.second }))
         if (o.showCodex) add(Panel(snap.codex, "Codex", t.codex, hist.map { it.first to it.third }))
+        // Google publishes no usage-limit API, so Gemini rides along as an honest
+        // presence panel (no fabricated %) — off unless the user turns it on.
+        if (o.showGemini) add(Panel(snap.gemini, "Gemini", t.gemini, emptyList(), noUsageApi = true))
     }
 
     private class Panel(
@@ -245,6 +254,8 @@ object WidgetRenderer {
         val name: String,
         val color: Int,
         val series: List<Pair<Long, Int>>,
+        /** True for a provider that has no usage-limit API at all (Gemini): show an honest note. */
+        val noUsageApi: Boolean = false,
     )
 
     /** Keeps the bitmap crisp but well under the memory a RemoteViews update may carry. */
@@ -308,10 +319,14 @@ object WidgetRenderer {
         val used = bhEff * n + gap * (n - 1)
         val y = pad + max(0f, (h - pad * 2 - (if (foot) FOOT else 0f) - used) / 2f)
 
+        // One hero column width for the whole widget so every provider's bar starts at
+        // the same x — the fix for bars that used to jump left/right with the digit count.
+        val heroColW = heroColumn(g, panels)
+
         panels.forEachIndexed { i, p ->
             val by = y + i * (bhEff + gap)
             if (i > 0) g.line(x, by - gap / 2f, cw, t.rule)
-            drawBlock(g, x, by, cw, p, t, o, tier, stretch)
+            drawBlock(g, x, by, cw, p, t, o, tier, heroColW, stretch)
         }
 
         if (foot) footer(g, x, cw, h - pad - 1f, t, snap, refreshing)
@@ -322,11 +337,14 @@ object WidgetRenderer {
     private fun footer(
         g: Pen, x: Float, cw: Float, fy: Float, t: Theme, snap: Snapshot, refreshing: Boolean,
     ) {
-        g.refreshIcon(x + 4f, fy - 4.5f, 4f, t.faint)
+        g.refreshIcon(x + 4.5f, fy - 5f, 4.5f, t.faint)
         val stamp = if (refreshing) "updating…"
         else if (snap.fetchedAt > 0) "updated " + clock(snap.fetchedAt) else "not updated yet"
-        g.text(stamp, x + 12f, fy - 1f, 9f, 500, t.faint)
-        g.text("Open app", x + cw, fy - 1f, 9f, 500, t.faint, Paint.Align.RIGHT)
+        val stampW = g.text(stamp, x + 14f, fy - 1f, 10.5f, 500, t.faint)
+        // "Open app" only when it clears the timestamp — the whole widget taps anyway.
+        if (14f + stampW + 12f + g.measure("Open app", 10.5f, 500) <= cw) {
+            g.text("Open app", x + cw, fy - 1f, 10.5f, 500, t.faint, Paint.Align.RIGHT)
+        }
     }
 
     private fun staleDot(g: Pen, w: Float, t: Theme, snap: Snapshot) {
@@ -356,12 +374,7 @@ object WidgetRenderer {
         if (plan != null) cx += g.chip(plan, cx, pad - 1f, p.color) + 7f
 
         if (b == null) {
-            val msg = when {
-                !p.state.configured -> "Tap to sign in"
-                p.state.error != null -> shortError(p.state.error)
-                else -> "No data yet"
-            }
-            g.text(msg, x, pad + 38f, 13f, 500, if (p.state.error != null) t.warn else t.dim)
+            g.text(noWindowMsg(p), x, pad + 42f, 14f, 500, if (p.state.error != null) t.warn else t.dim)
             return false
         }
 
@@ -372,44 +385,44 @@ object WidgetRenderer {
         // Measure at the weight it is actually drawn at — the warning is heavier than
         // the plain reset text, so measuring at 500 let it overflow the fit guard.
         val headWeight = if (proj != null) 600 else 500
-        if (g.measure(head, 10f, headWeight) <= x + cw - cx) {
-            g.text(head, x + cw, pad + 10.5f, 10f, headWeight,
+        if (g.measure(head, 11f, headWeight) <= x + cw - cx) {
+            g.text(head, x + cw, pad + 11f, 11f, headWeight,
                 if (proj != null) t.warn else t.faint, Paint.Align.RIGHT)
         }
 
         // Hero, sized up now that it is not sharing the widget — but kept modest on
         // short widgets so the window rows still get a look in.
-        val tight = h < 132f
-        val hy = pad + if (tight) 14f else 18f
-        val heroSize = if (tight) 29f else 35f
+        val tight = h < 140f
+        val hy = pad + if (tight) 15f else 20f
+        val heroSize = if (tight) 33f else 42f
         val heroBase = hy + heroSize * .77f
         // "USED" eyebrow, inline left of the number, so the headline reads "USED 68%".
-        val ew = g.text("USED", x, heroBase - heroSize * .30f, 9f, 700, t.dim, tracking = .06f)
-        val hx = x + ew + 7f
+        val ew = g.text("USED", x, heroBase - heroSize * .30f, 10.5f, 700, t.dim, tracking = .06f)
+        val hx = x + ew + 8f
         val nw = g.text("${b.pct}", hx, heroBase, heroSize, 700, sc, tracking = -.017f)
         g.text("%", hx + nw + 3f, heroBase, heroSize * .43f, 700, sc)
-        val bx = hx + nw + if (tight) 22f else 26f
-        g.bar(bx, hy + heroSize * .31f, x + cw - bx, if (tight) 10f else 12f, b.pct, sc)
-        val nameY = heroBase + 15f
-        g.text(windowName(b.label), x, nameY, 10f, 500, t.dim, tracking = .02f)
+        val bx = hx + nw + if (tight) 24f else 30f
+        g.bar(bx, heroBase - heroSize * .30f - 5.5f, x + cw - bx, if (tight) 11f else 13f, b.pct, sc)
+        val nameY = heroBase + 17f
+        g.text(windowName(b.label), x, nameY, 11f, 500, t.dim, tracking = .02f)
         // Fill the room beside the window name with what is left and how fast it is going.
         val burn = burnText(p.series)
         val stat = "${100 - b.pct}% left" + (burn?.let { " · " + it.first } ?: "")
-        g.text(stat, x + cw, nameY, 9.5f, 500,
+        g.text(stat, x + cw, nameY, 11f, 500,
             if (burn?.second == true) t.warn else t.faint, Paint.Align.RIGHT)
 
-        // Every other window gets a real row.
+        // Every other window gets a real row, its bar in a column shared with the others.
         val rest = p.state.windows.filter { it !== b }
-        var ry = hy + heroSize * .77f + if (tight) 22f else 25f
+        var ry = nameY + 12f
+        val lx = x + 54f
+        val rw = max(24f, cw - 54f - 104f)
         rest.forEach { v ->
-            if (ry + 13f > h - pad) return@forEach
-            g.text(v.label, x, ry + 8f, 9.5f, 600, t.dim, tracking = .02f)
-            val lx = x + 46f
-            val rw = max(20f, cw - 46f - 92f)
-            g.bar(lx, ry + 3f, rw, 6f, v.pct, t.status(v.pct, p.color))
-            g.text("${v.pct}%", lx + rw + 34f, ry + 8f, 10f, 700, t.text, Paint.Align.RIGHT)
-            g.text(left(v.resetsAt), x + cw, ry + 8f, 9f, 500, t.faint, Paint.Align.RIGHT)
-            ry += 15f
+            if (ry + 15f > h - pad) return@forEach
+            g.text(v.label, x, ry + 9f, 11f, 600, t.dim, tracking = .02f)
+            g.bar(lx, ry + 3f, rw, 7f, v.pct, t.status(v.pct, p.color))
+            g.text("${v.pct}%", lx + rw + 40f, ry + 9f, 11.5f, 700, t.text, Paint.Align.RIGHT)
+            g.text(left(v.resetsAt), x + cw, ry + 9f, 10f, 500, t.faint, Paint.Align.RIGHT)
+            ry += 17f
         }
 
         // Whatever the rows left over is spent in order: footer first (it is the
@@ -425,9 +438,18 @@ object WidgetRenderer {
         return foot
     }
 
+    /** Width reserved for the "USED nn%" hero across all panels, so every bar starts aligned. */
+    private fun heroColumn(g: Pen, panels: List<Panel>): Float {
+        val eyebrow = g.measure("USED", 10.5f, 700, .06f)
+        val pctW = g.measure("%", 15f, 700)
+        val maxPct = panels.mapNotNull { binding(it.state)?.pct }.maxOrNull() ?: 88
+        val numW = g.measure(maxPct.toString(), 34f, 700, -.017f)
+        return eyebrow + 7f + numW + 2f + pctW + 16f
+    }
+
     private fun drawBlock(
         g: Pen, x: Float, y: Float, w: Float, p: Panel, t: Theme, o: Opts, tier: Int,
-        stretch: Float = 0f,
+        heroColW: Float, stretch: Float = 0f,
     ) {
         val st = p.state
         val name = p.name
@@ -436,19 +458,14 @@ object WidgetRenderer {
         val med = tier == MEDIUM
         val b = binding(st)
 
-        g.circle(x + 3.5f, y + 5.5f, 3.5f, if (st.configured) color else t.faint)
-        var cx = x + 12f
-        cx += g.text(name, cx, y + 9.5f, 11.5f, 700, if (st.configured) color else t.dim, tracking = .035f) + 6f
+        g.circle(x + 4f, y + 6.5f, 3.8f, if (st.configured) color else t.faint)
+        var cx = x + 13f
+        cx += g.text(name, cx, y + 11f, 13f, 700, if (st.configured) color else t.dim, tracking = .035f) + 7f
         val plan = if (st.configured) prettyPlan(st.plan) else null
-        if (plan != null) cx += g.chip(plan, cx, y - 1.5f, color) + 6f
+        if (plan != null) cx += g.chip(plan, cx, y - 0.5f, color) + 7f
 
         if (b == null) {
-            val msg = when {
-                !st.configured -> "Tap to sign in"
-                st.error != null -> shortError(st.error)
-                else -> "No data yet"
-            }
-            g.text(msg, x, y + if (med) 30f else 34f, if (med) 11f else 12f, 500,
+            g.text(noWindowMsg(p), x, y + if (med) 34f else 42f, if (med) 12.5f else 13.5f, 500,
                 if (st.error != null) t.warn else t.dim)
             return
         }
@@ -462,41 +479,57 @@ object WidgetRenderer {
         // Medium carries the reset on its own meta line, so only the taller tiers
         // put it in the header — otherwise it reads twice.
         val wantHead = !med || proj != null
-        val headW = g.measure(head, 9.5f, headWeight)
+        val headW = g.measure(head, 11f, headWeight)
         val headInHeader = wantHead && headW <= x + w - cx
         if (headInHeader) {
-            g.text(head, x + w, y + 9.5f, 9.5f, headWeight, headColor, Paint.Align.RIGHT)
+            g.text(head, x + w, y + 11f, 11f, headWeight, headColor, Paint.Align.RIGHT)
         }
 
         if (med) {
-            val pw = g.text("${b.pct}%", x + w, y + 24f, 13.5f, 700, sc, Paint.Align.RIGHT)
-            val uw = g.text("USED", x + w - pw - 5f, y + 24f, 8f, 700, t.dim, Paint.Align.RIGHT, .06f)
-            g.bar(x, y + 15f, w - pw - uw - 15f, 9f, b.pct, sc)
-            g.text(
-                shortWindow(b.label) + " · " + (100 - b.pct) + "% left · resets " + clock(b.resetsAt),
-                x, y + 35f, 9f, 500, t.faint
-            )
+            // Reserve the right column for the widest possible "USED 100%" so every bar
+            // ends at the same x regardless of the value — bars line up across providers.
+            val rightCol = g.measure("100%", 16f, 700) + g.measure("USED", 9f, 700, .06f) + 12f
+            val pw = g.text("${b.pct}%", x + w, y + 29f, 16f, 700, sc, Paint.Align.RIGHT)
+            g.text("USED", x + w - pw - 6f, y + 29f, 9f, 700, t.dim, Paint.Align.RIGHT, .06f)
+            // A stub bar reads as noise; below a useful width the number carries alone.
+            if (w - rightCol >= 32f) g.bar(x, y + 19f, w - rightCol, 10f, b.pct, sc)
+            // Drop meta segments from the end until the line fits a narrow widget.
+            val left = 100 - b.pct
+            val meta = listOf(
+                shortWindow(b.label) + " · " + left + "% left · resets " + clock(b.resetsAt),
+                "$left% left · resets " + clock(b.resetsAt),
+                "$left% left",
+            ).firstOrNull { g.measure(it, 10f, 500) <= w } ?: "$left% left"
+            g.text(meta, x, y + 41f, 10f, 500, t.faint)
             return
         }
 
-        // Hero: a small "USED" eyebrow spells out that the big number is consumption,
-        // not what remains — the ambiguity the user kept hitting. Bar alongside it.
-        val ew = g.text("USED", x, y + 34f, 9f, 700, t.dim, tracking = .06f)
-        val hx = x + ew + 7f
-        val nw = g.text("${b.pct}", hx, y + 37f, 29f, 700, sc, tracking = -.017f)
-        g.text("%", hx + nw + 2f, y + 37f, 12.5f, 700, sc)
-        val bx = hx + nw + 21f
-        g.bar(bx, y + 23f, x + w - bx, 10f, b.pct, sc)
+        // Hero: the number is left-aligned after a vertically-centred "USED" eyebrow, and
+        // the bar starts at a column shared by every provider (heroColW), so the bars line
+        // up no matter whether a value is one, two or three digits — the main unevenness.
+        val heroBase = y + 44f
+        val numCenter = heroBase - 34f * .34f
+        g.text("USED", x, numCenter + 10.5f * .34f, 10.5f, 700, t.dim, tracking = .06f)
+        val eyebrowW = g.measure("USED", 10.5f, 700, .06f)
+        val hx = x + eyebrowW + 7f
+        val nw = g.text("${b.pct}", hx, heroBase, 34f, 700, sc, tracking = -.017f)
+        val pcw = g.text("%", hx + nw + 2f, heroBase, 15f, 700, sc)
+        // The bar shares the row only when it genuinely fits; on a narrow widget it is
+        // dropped rather than drawn over the number, and the big "USED nn%" carries alone.
+        val bx = x + heroColW
+        if (bx >= hx + nw + 2f + pcw + 8f && x + w - bx >= 44f) {
+            g.bar(bx, numCenter - 5.5f, x + w - bx, 11f, b.pct, sc)
+        }
 
-        val my = y + 43f
-        val lw = g.text(windowName(b.label), x, my + 8f, 9.5f, 500, t.dim, tracking = .02f)
-        val room = w - lw - 14f
+        val my = y + 58f
+        val lw = g.text(windowName(b.label), x, my, 11f, 500, t.dim, tracking = .02f)
+        val room = w - lw - 16f
         if (wantHead && !headInHeader && headW <= room) {
             // A wide plan chip crowded the header out; when it comes to it, knowing
             // when the limit lifts beats listing the other windows.
-            g.text(head, x + w, my + 8f, 9.5f, headWeight, headColor, Paint.Align.RIGHT)
+            g.text(head, x + w, my, 11f, headWeight, headColor, Paint.Align.RIGHT)
         } else {
-            drawSecondary(g, x + w, my + 8f, room, st.windows.filter { it !== b }, color, t)
+            drawSecondary(g, x + w, my, room, st.windows.filter { it !== b }, color, t)
         }
 
         // Everything under the meta line is opportunistic, spent to fill the block so a
@@ -507,26 +540,34 @@ object WidgetRenderer {
         // whatever height the block was stretched to.
         val wantSpark = tier == RICH && o.sparkline
         val blockBottom = y + blockH(tier, o.sparkline) + stretch
-        var top = y + 55f
+        var top = y + 64f
         if (wantSpark) {
             var sh = blockBottom - top - 2f
-            if (sh >= 32f) { drawStats(g, x, top + 8f, w, b, series, t); top += 16f; sh -= 16f }
+            if (sh >= 34f) { drawStats(g, x, top + 9f, w, b, series, t); top += 17f; sh -= 17f }
             if (sh >= 16f) sparkline(g, x, top, w, blockBottom - top - 2f, series, color, t)
         } else if (blockBottom - top >= 7f) {
-            drawStats(g, x, top + 8f, w, b, series, t)
+            drawStats(g, x, top + 9f, w, b, series, t)
         }
+    }
+
+    /** Message for a panel with no readable window — honest for Gemini, which has no usage API. */
+    private fun noWindowMsg(p: Panel): String = when {
+        !p.state.configured -> "Tap to sign in"
+        p.state.error != null -> shortError(p.state.error!!)
+        p.noUsageApi -> "No usage limit published"
+        else -> "No data yet"
     }
 
     /** Right-aligned group of the non-binding windows; degrades until it fits. */
     private fun drawSecondary(
         g: Pen, rightX: Float, baseY: Float, maxW: Float, rest: List<Win>, color: Int, t: Theme,
     ) {
-        if (rest.isEmpty() || maxW < 40f) return
+        if (rest.isEmpty() || maxW < 44f) return
         fun width(items: List<Win>, withBar: Boolean): Float =
             items.sumOf {
-                (g.measure(it.label, 9f, 600, .02f) + (if (withBar) 22f else 0f) + 4f +
-                    g.measure("${it.pct}%", 9.5f, 700)).toDouble()
-            }.toFloat() + (items.size - 1) * 11f
+                (g.measure(it.label, 10f, 600, .02f) + (if (withBar) 24f else 0f) + 5f +
+                    g.measure("${it.pct}%", 11f, 700)).toDouble()
+            }.toFloat() + (items.size - 1) * 12f
 
         for (withBar in booleanArrayOf(true, false)) {
             for (n in rest.size downTo 1) {
@@ -534,12 +575,12 @@ object WidgetRenderer {
                 if (width(items, withBar) > maxW) continue
                 var rx = rightX
                 items.reversed().forEach { v ->
-                    rx -= g.text("${v.pct}%", rx, baseY, 9.5f, 700, t.text, Paint.Align.RIGHT) + 4f
+                    rx -= g.text("${v.pct}%", rx, baseY, 11f, 700, t.text, Paint.Align.RIGHT) + 5f
                     if (withBar) {
-                        g.bar(rx - 18f, baseY - 5.5f, 18f, 4.5f, v.pct, t.status(v.pct, color))
-                        rx -= 22f
+                        g.bar(rx - 20f, baseY - 6f, 20f, 5f, v.pct, t.status(v.pct, color))
+                        rx -= 24f
                     }
-                    rx -= g.text(v.label, rx, baseY, 9f, 600, t.dim, Paint.Align.RIGHT, .02f) + 11f
+                    rx -= g.text(v.label, rx, baseY, 10f, 600, t.dim, Paint.Align.RIGHT, .02f) + 12f
                 }
                 return
             }
@@ -549,12 +590,12 @@ object WidgetRenderer {
     /** Compact: providers side by side, one glance each. */
     private fun drawCompact(g: Pen, w: Float, h: Float, panels: List<Panel>, t: Theme) {
         val pad = 13f
-        val gap = 16f
+        val gap = 18f
         val n = max(1, panels.size)
         val colW = (w - pad * 2 - gap * (n - 1)) / n
         // Below this there is no room for a name and a number on the same line.
-        val roomy = colW >= 92f
-        val single = h >= 56f
+        val roomy = colW >= 96f
+        val single = h >= 60f
 
         panels.forEachIndexed { i, p ->
             val x = pad + i * (colW + gap)
@@ -563,21 +604,28 @@ object WidgetRenderer {
             val cy = h / 2f
             val nameColor = if (p.state.configured) p.color else t.dim
             if (roomy) {
-                g.circle(x + 3.5f, cy - 10f, 3.5f, if (p.state.configured) p.color else t.faint)
-                g.text(p.name, x + 12f, cy - 6.5f, 10f, 700, nameColor, tracking = .03f)
-                g.text(if (b != null) "${b.pct}%" else "--", x + colW, cy - 6.5f, 12.5f, 700, sc, Paint.Align.RIGHT)
+                g.circle(x + 4f, cy - 11f, 3.5f, if (p.state.configured) p.color else t.faint)
+                g.text(p.name, x + 13f, cy - 7f, 11f, 700, nameColor, tracking = .03f)
+                val numW = g.text(if (b != null) "${b.pct}%" else "--", x + colW, cy - 7f, 14f, 700, sc, Paint.Align.RIGHT)
+                if (b != null && colW >= 128f) {
+                    g.text("USED", x + colW - numW - 5f, cy - 7f, 8f, 700, t.dim, Paint.Align.RIGHT, .06f)
+                }
             } else {
                 // Too narrow for both: the number is what matters, keep only a colour cue.
-                g.circle(x + 3.5f, cy - 9f, 3.5f, if (p.state.configured) p.color else t.faint)
-                g.text(if (b != null) "${b.pct}%" else "--", x + colW, cy - 5.5f, 12f, 700, sc, Paint.Align.RIGHT)
+                g.circle(x + 4f, cy - 10f, 3.5f, if (p.state.configured) p.color else t.faint)
+                g.text(if (b != null) "${b.pct}%" else "--", x + colW, cy - 6f, 14f, 700, sc, Paint.Align.RIGHT)
             }
-            g.bar(x, cy, colW, 8f, b?.pct ?: 0, sc)
+            g.bar(x, cy, colW, 9f, b?.pct ?: 0, sc)
             if (single) {
-                val sub = if (b != null) {
-                    val full = shortWindow(b.label) + " · " + left(b.resetsAt) + " left"
-                    if (g.measure(full, 8.5f, 500) <= colW) full else left(b.resetsAt) + " left"
-                } else "tap to sign in"
-                g.text(sub, x, cy + 18f, 8.5f, 500, t.faint)
+                val sub = when {
+                    b != null -> {
+                        val full = shortWindow(b.label) + " · " + left(b.resetsAt) + " left"
+                        if (g.measure(full, 10f, 500) <= colW) full else left(b.resetsAt) + " left"
+                    }
+                    p.noUsageApi -> "no usage API"
+                    else -> "tap to sign in"
+                }
+                g.text(sub, x, cy + 20f, 10f, 500, t.faint)
             }
         }
     }
@@ -623,13 +671,14 @@ object WidgetRenderer {
         val n = max(1, panels.size)
         // Squeezed short, the caption is the first thing to go — a clipped label
         // below the dial is worse than no label at all.
-        val showLabel = h >= 84f
-        val showSub = h >= 100f
-        val bottom = if (showSub) 26f else if (showLabel) 15f else 0f
+        val showLabel = h >= 88f
+        val showSub = h >= 104f
+        val bottom = if (showSub) 30f else if (showLabel) 17f else 0f
         // One ring gets the whole card, so it can be much larger.
-        val r = min((w / n - 34f) / 2f, (h - bottom - 14f) / 2f).coerceAtLeast(10f)
+        val r = min((w / n - 30f) / 2f, (h - bottom - 14f) / 2f).coerceAtLeast(10f)
         panels.forEachIndexed { i, p ->
-            val cx = if (n == 1) w / 2f else w * (if (i == 1) .73f else .27f)
+            // Evenly spaced across the width so two or three dials both sit centred.
+            val cx = if (n == 1) w / 2f else w * (i + 0.5f) / n
             val cy = (h - bottom) / 2f + 2f
             val st = p.state
             val name = p.name.uppercase()
@@ -652,12 +701,14 @@ object WidgetRenderer {
             }
             g.text(label, cx - off, cy + ns * .34f, ns, 700, c, tracking = -.017f)
             if (b != null) g.text("%", cx - off + nw + 1.5f, cy + ns * .34f, r * .26f, 700, c)
-            if (showLabel) g.text(name, cx, cy + r + 11f, 9f, 700, t.dim, Paint.Align.CENTER, .05f)
+            if (showLabel) g.text(name, cx, cy + r + 13f, 10.5f, 700, t.dim, Paint.Align.CENTER, .05f)
             if (showSub) {
-                g.text(
-                    if (b != null) left(b.resetsAt) + " left" else "tap to sign in",
-                    cx, cy + r + 22f, 8.5f, 500, t.faint, Paint.Align.CENTER
-                )
+                val sub = when {
+                    b != null -> left(b.resetsAt) + " left"
+                    p.noUsageApi -> "no usage API"
+                    else -> "tap to sign in"
+                }
+                g.text(sub, cx, cy + r + 26f, 10f, 500, t.faint, Paint.Align.CENTER)
             }
         }
     }
@@ -669,39 +720,39 @@ object WidgetRenderer {
         val pad = 14f
         val cw = w - pad * 2
         val panels = visible(snap, hist = emptyList(), t = t, o = o)
-        val rowH = 23f
+        val rowH = 26f
         val top = h / 2f - rowH * panels.size / 2f + 1f
 
         // Columns are budgeted from the width actually available rather than fixed
         // offsets, which used to go negative and push text past the right edge.
-        val nameW = min(56f, max(0f, cw * .26f))
-        val showName = nameW >= 40f
+        val nameW = min(62f, max(0f, cw * .26f))
+        val showName = nameW >= 44f
         // Wide enough to spell out "USED nn%"; otherwise the number stands alone.
-        val showUsed = cw >= 200f
-        val pctW = if (showUsed) min(78f, cw * .30f) else min(40f, cw * .18f)
-        val resetW = if (cw >= 210f) min(52f, cw * .2f) else 0f
+        val showUsed = cw >= 210f
+        val pctW = if (showUsed) min(86f, cw * .30f) else min(46f, cw * .18f)
+        val resetW = if (cw >= 224f) min(58f, cw * .2f) else 0f
         val barX = pad + if (showName) nameW else 12f
-        val barW = max(16f, pad + cw - resetW - pctW - 6f - barX)
+        val barW = max(18f, pad + cw - resetW - pctW - 6f - barX)
 
         panels.forEachIndexed { i, p ->
             val y = top + i * rowH
             val b = binding(p.state)
             val sc = if (b != null) t.status(b.pct, p.color) else t.faint
-            g.circle(pad + 3f, y + 5f, 3f, if (p.state.configured) p.color else t.faint)
+            g.circle(pad + 3.5f, y + 6.5f, 3.4f, if (p.state.configured) p.color else t.faint)
             if (showName) {
-                g.text(p.name, pad + 11f, y + 8.5f, 9.5f, 700,
+                g.text(p.name, pad + 12f, y + 11f, 11f, 700,
                     if (p.state.configured) p.color else t.dim, tracking = .03f)
             }
-            g.bar(barX, y + 2f, barW, 8f, b?.pct ?: 0, sc)
+            g.bar(barX, y + 4f, barW, 9f, b?.pct ?: 0, sc)
             val numRight = barX + barW + pctW
-            val numW = g.text(if (b != null) "${b.pct}%" else "--", numRight, y + 8.5f, 11f, 700,
+            val numW = g.text(if (b != null) "${b.pct}%" else "--", numRight, y + 11f, 13f, 700,
                 t.text, Paint.Align.RIGHT)
             if (b != null && showUsed) {
-                g.text("USED", numRight - numW - 4f, y + 8.5f, 7.5f, 700, t.dim,
+                g.text("USED", numRight - numW - 5f, y + 11f, 8.5f, 700, t.dim,
                     Paint.Align.RIGHT, .06f)
             }
             if (resetW > 0f) {
-                g.text(if (b != null) left(b.resetsAt) else "—", pad + cw, y + 8.5f, 8.5f, 500,
+                g.text(if (b != null) left(b.resetsAt) else "—", pad + cw, y + 11f, 10f, 500,
                     t.faint, Paint.Align.RIGHT)
             }
         }
@@ -732,28 +783,28 @@ object WidgetRenderer {
         val t0 = now - span
 
         if (showHeader) {
-            g.text("Last 24 hours", padL, 17f, 10f, 700, t.text, tracking = .03f)
+            g.text("Last 24 hours · USED %", padL, 18f, 11.5f, 700, t.text, tracking = .03f)
             var lx = w - padR
             panels.reversed().forEach { p ->
                 val b = binding(p.state)
                 val c = p.color
                 val s = if (b != null) "${p.name} ${b.pct}%" else p.name
-                val tw = g.measure(s, 9f, 600, .02f)
-                g.text(s, lx, 17f, 9f, 600, c, Paint.Align.RIGHT, .02f)
-                g.circle(lx - tw - 7f, 13.5f, 2.6f, c)
-                lx -= tw + 17f
+                val tw = g.measure(s, 10.5f, 600, .02f)
+                g.text(s, lx, 18f, 10.5f, 600, c, Paint.Align.RIGHT, .02f)
+                g.circle(lx - tw - 8f, 14f, 2.8f, c)
+                lx -= tw + 19f
             }
         }
 
         intArrayOf(0, 50, 100).forEach { v ->
             val y = gy + (100 - v) / 100f * gh
             g.line(gx, y, gw, t.rule)
-            if (showYAxis) g.text("$v%", gx + gw + 5f, y + 3.2f, 8.5f, 500, t.faint)
+            if (showYAxis) g.text("$v%", gx + gw + 5f, y + 3.4f, 9.5f, 500, t.faint)
         }
         if (showXAxis) {
-            g.text("24h ago", gx, h - 6f, 8.5f, 500, t.faint)
-            g.text("12h", gx + gw / 2f, h - 6f, 8.5f, 500, t.faint, Paint.Align.CENTER)
-            g.text("now", gx + gw, h - 6f, 8.5f, 500, t.faint, Paint.Align.RIGHT)
+            g.text("24h ago", gx, h - 6f, 9.5f, 500, t.faint)
+            g.text("12h", gx + gw / 2f, h - 6f, 9.5f, 500, t.faint, Paint.Align.CENTER)
+            g.text("now", gx + gw, h - 6f, 9.5f, 500, t.faint, Paint.Align.RIGHT)
         }
 
         fun px(ms: Long) = gx + (ms - t0).toFloat() / span * gw
@@ -844,9 +895,12 @@ object WidgetRenderer {
     private fun drawStats(
         g: Pen, x: Float, baseY: Float, w: Float, b: Win, series: List<Pair<Long, Int>>, t: Theme,
     ) {
-        g.text("${100 - b.pct}% left", x, baseY, 9.5f, 600, t.dim)
+        val leftW = g.text("${100 - b.pct}% left", x, baseY, 11f, 600, t.dim)
         val burn = burnText(series) ?: return
-        g.text(burn.first, x + w, baseY, 9.5f, 500, if (burn.second) t.warn else t.faint, Paint.Align.RIGHT)
+        // Only add the burn phrase when it clears the "N% left" text on a narrow block.
+        if (leftW + 12f + g.measure(burn.first, 11f, 500) <= w) {
+            g.text(burn.first, x + w, baseY, 11f, 500, if (burn.second) t.warn else t.faint, Paint.Align.RIGHT)
+        }
     }
 
     private fun clock(ms: Long): String =
@@ -911,6 +965,7 @@ object WidgetRenderer {
         val rule = ctx.getColor(R.color.rule)
         val claude = ctx.getColor(R.color.claude)
         val codex = ctx.getColor(R.color.codex)
+        val gemini = ctx.getColor(R.color.gemini)
         val warn = ctx.getColor(R.color.warn)
         val red = ctx.getColor(R.color.red)
         val chipBg = ctx.getColor(R.color.chip_bg)

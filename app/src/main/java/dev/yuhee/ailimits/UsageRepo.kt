@@ -18,23 +18,32 @@ data class Snapshot(
     val claude: ProviderState,
     val codex: ProviderState,
     val fetchedAt: Long,
+    // Gemini has no usage-limit API, so it is a settings-derived presence card, not fetched.
+    val gemini: ProviderState = ProviderState(false, emptyList(), null),
 )
 
 object UsageRepo {
 
     fun load(ctx: Context): Snapshot {
-        val raw = Prefs.snapshot(ctx) ?: return Snapshot(empty(ctx, "claude"), empty(ctx, "codex"), 0)
+        val g = geminiState(ctx)
+        val raw = Prefs.snapshot(ctx)
+            ?: return Snapshot(empty(ctx, "claude"), empty(ctx, "codex"), 0, g)
         return try {
             val j = JSONObject(raw)
             Snapshot(
                 parseProvider(j.optJSONObject("claude"), configuredClaude(ctx)),
                 parseProvider(j.optJSONObject("codex"), configuredCodex(ctx)),
-                j.optLong("fetchedAt", 0)
+                j.optLong("fetchedAt", 0),
+                g,
             )
         } catch (_: Exception) {
-            Snapshot(empty(ctx, "claude"), empty(ctx, "codex"), 0)
+            Snapshot(empty(ctx, "claude"), empty(ctx, "codex"), 0, g)
         }
     }
+
+    /** Gemini is derived from settings each render: enabled = shown, plus an optional plan. */
+    private fun geminiState(ctx: Context) =
+        ProviderState(Settings.showGemini(ctx), emptyList(), null, Settings.geminiPlan(ctx))
 
     private fun configuredClaude(ctx: Context) = Prefs.claudeTokens(ctx).first != null
     private fun configuredCodex(ctx: Context) = Prefs.codexTokens(ctx) != null
@@ -110,7 +119,7 @@ object UsageRepo {
         // stale warning unreachable, since that warning is keyed off this very field.
         val anyFresh = claudeOk || codexOk
         val fetchedAt = if (anyFresh) System.currentTimeMillis() else prev.fetchedAt
-        val snap = Snapshot(claude, codex, fetchedAt)
+        val snap = Snapshot(claude, codex, fetchedAt, geminiState(ctx))
         val j = JSONObject()
             .put("claude", providerJson(claude))
             .put("codex", providerJson(codex))

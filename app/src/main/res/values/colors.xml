@@ -11,6 +11,7 @@
     <color name="chip_bg">#0F000000</color>
     <color name="claude">#C65D3A</color>
     <color name="codex">#0E9F63</color>
+    <color name="gemini">#3B6FE0</color>
     <color name="warn">#B5761F</color>
     <color name="red">#D33A40</color>
     <color name="icon_bg">#171314</color>
