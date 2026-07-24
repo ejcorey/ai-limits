@@ -13,5 +13,14 @@
     <string name="widget_rings_desc">Two dial gauges showing how much of your tightest limit is spent, and how long until it resets.</string>
 
     <string name="widget_graph_label">Auspex · History</string>
-    <string name="widget_graph_desc">A 24-hour chart of how fast you have been burning through both providers.</string>
+    <string name="widget_graph_desc">A 24-hour chart of how fast you have been burning through your providers.</string>
+
+    <string name="widget_battery_label">Auspex · Battery</string>
+    <string name="widget_battery_desc">Each AI drawn as a battery — how much of the limit is left before it runs dry.</string>
+
+    <string name="widget_countdown_label">Auspex · Countdown</string>
+    <string name="widget_countdown_desc">The time until each limit resets, with how far through the window you are.</string>
+
+    <string name="widget_ticker_label">Auspex · Ticker</string>
+    <string name="widget_ticker_desc">A one-line readout of every provider — the smallest possible footprint.</string>
 </resources>

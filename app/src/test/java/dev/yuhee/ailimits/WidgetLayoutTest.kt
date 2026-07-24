@@ -84,7 +84,7 @@ class WidgetLayoutTest {
             now,
         )
         val hist = (0..40).map { i ->
-            Triple(now - (40 - i) * 30 * 60_000L, 10 + i, 5 + i / 2)
+            HistoryPoint(now - (40 - i) * 30 * 60_000L, 10 + i, 5 + i / 2, 3 + i / 3)
         }
 
         // Sizes chosen to exercise both branches of the footer, since the footer is

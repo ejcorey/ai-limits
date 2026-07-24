@@ -13,6 +13,7 @@ import android.view.ViewGroup
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.SeekBar
@@ -43,6 +44,7 @@ class MainActivity : AppCompatActivity() {
 
     private val scope = MainScope()
     private var codexServer: CodexLoginServer? = null
+    private var geminiServer: GeminiLoginServer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -111,6 +113,43 @@ class MainActivity : AppCompatActivity() {
             Prefs.clearCodex(this); updateStatus(); WidgetRenderer.updateAll(this)
         }
 
+        findViewById<Button>(R.id.btnGeminiSignIn).setOnClickListener {
+            geminiServer?.stop()
+            Prefs.clearGeminiPending(this)
+            val flow = GeminiApi.beginLogin(this)
+            geminiServer = GeminiLoginServer(applicationContext, flow) { err ->
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    if (err != null) {
+                        showError("Gemini sign-in failed", RuntimeException(err))
+                    }
+                    updateStatus()
+                }
+            }.also { it.start() }
+            openUrl(flow.url)
+            toast("Log in with Google, then come back here to finish")
+        }
+
+        findViewById<Button>(R.id.btnGeminiPaste).setOnClickListener {
+            promptText(
+                "Paste callback link",
+                "http://localhost:${GeminiApi.PORT}/oauth2callback?code=…"
+            ) { text ->
+                scope.launch {
+                    try {
+                        withContext(Dispatchers.IO) { GeminiApi.finishLoginManual(this@MainActivity, text) }
+                        onGeminiSignedIn()
+                    } catch (e: Exception) {
+                        showError("Gemini sign-in failed", e)
+                    }
+                }
+            }
+        }
+
+        findViewById<Button>(R.id.btnGeminiSignOut).setOnClickListener {
+            Prefs.clearGemini(this); updateStatus(); WidgetRenderer.updateAll(this)
+        }
+
         findViewById<Button>(R.id.btnRefresh).setOnClickListener { refreshNowUi() }
         findViewById<Button>(R.id.btnDiagnostics).setOnClickListener { copyDiagnostics() }
 
@@ -134,16 +173,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun setUpAppearance() {
         syncProviderSwitches()
-
-        // Gemini plan label: saved when focus leaves the field, then pushed to the widget.
-        val planField = findViewById<EditText>(R.id.etGeminiPlan)
-        planField.setText(Settings.geminiPlan(this) ?: "")
-        planField.setOnFocusChangeListener { _, hasFocus ->
-            if (!hasFocus) {
-                Settings.setGeminiPlan(this, planField.text.toString())
-                applyWidgetChange()
-            }
-        }
 
         val themes = ThemeMode.entries
         spinner(R.id.spinnerTheme, themes.map { it.label }, themes.indexOf(Settings.themeMode(this))) { pos ->
@@ -186,9 +215,6 @@ class MainActivity : AppCompatActivity() {
         switch(R.id.swShowGemini, Settings.showGemini(this)) { on ->
             Settings.setShowGemini(this, on); syncProviderSwitches(); applyWidgetChange()
         }
-        val gem = Settings.showGemini(this)
-        findViewById<TextView>(R.id.geminiHint).visibility = if (gem) View.VISIBLE else View.GONE
-        findViewById<EditText>(R.id.etGeminiPlan).visibility = if (gem) View.VISIBLE else View.GONE
         findViewById<TextView>(R.id.soloHint).visibility =
             if (Settings.solo(this)) View.VISIBLE else View.GONE
     }
@@ -226,7 +252,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun setUpPreview() {
         val styles = WidgetRenderer.Style.entries
-        val labels = listOf("Detail", "Slim bars", "Rings", "History")
+        val labels = listOf("Detail", "Slim bars", "Rings", "History", "Battery", "Countdown", "Ticker")
         spinner(R.id.spinnerStyle, labels, styles.indexOf(Settings.previewStyle(this))) { pos ->
             Settings.setPreviewStyle(this, styles[pos]); renderPreview(force = true)
         }
@@ -307,9 +333,9 @@ class MainActivity : AppCompatActivity() {
     private fun copyDiagnostics() {
         val snap = UsageRepo.load(this)
         val sb = StringBuilder("Auspex diagnostics\n")
-        sb.append("version 2.3\n")
+        sb.append("version 2.4\n")
         sb.append("updated: ").append(if (snap.fetchedAt > 0) Date(snap.fetchedAt).toString() else "never").append('\n')
-        listOf("Claude" to snap.claude, "Codex" to snap.codex).forEach { (name, st) ->
+        listOf("Claude" to snap.claude, "Codex" to snap.codex, "Gemini" to snap.gemini).forEach { (name, st) ->
             sb.append(name).append(": configured=").append(st.configured)
             st.plan?.let { sb.append(" plan=").append(it) }
             st.error?.let { sb.append(" error=").append(it) }
@@ -345,6 +371,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private var codexExchangeInFlight = false
+    private var geminiExchangeInFlight = false
+
+    /** A Gemini sign-in also turns its widget panel on — that's clearly what was wanted. */
+    private fun onGeminiSignedIn() {
+        Settings.setShowGemini(this, true)
+        syncProviderSwitches()
+        toast("Gemini signed in ✓")
+        afterSetupChanged()
+    }
 
     override fun onResume() {
         super.onResume()
@@ -366,8 +401,26 @@ class MainActivity : AppCompatActivity() {
             }
             return
         }
+        // same deal for a Gemini login
+        if (!geminiExchangeInFlight && Prefs.geminiPendingCode(this) != null) {
+            geminiExchangeInFlight = true
+            scope.launch {
+                try {
+                    withContext(Dispatchers.IO) { GeminiApi.completePendingLogin(this@MainActivity) }
+                    onGeminiSignedIn()
+                } catch (e: Exception) {
+                    showError("Gemini sign-in failed", e)
+                    updateStatus()
+                } finally {
+                    geminiExchangeInFlight = false
+                }
+            }
+            return
+        }
         // if a login just completed while we were in the browser, show fresh numbers
-        if (Prefs.claudeTokens(this).first != null || Prefs.codexTokens(this) != null) {
+        if (Prefs.claudeTokens(this).first != null || Prefs.codexTokens(this) != null ||
+            Prefs.geminiTokens(this).first != null
+        ) {
             val snap = UsageRepo.load(this)
             if (snap.fetchedAt == 0L) refreshNowUi()
         }
@@ -376,6 +429,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         codexServer?.stop()
+        geminiServer?.stop()
         scope.cancel()
     }
 
@@ -437,10 +491,64 @@ class MainActivity : AppCompatActivity() {
         }
         renderRows(findViewById(R.id.codexRows), snap.codex, ContextCompat.getColor(this, R.color.codex))
 
+        val (gmAccess, _, _) = Prefs.geminiTokens(this)
+        findViewById<TextView>(R.id.geminiStatus).text = when {
+            gmAccess == null -> "Not signed in"
+            snap.gemini.error != null -> "Signed in ✓ — ⚠ ${snap.gemini.error}"
+            else -> "Signed in ✓" + (snap.gemini.plan?.let { "  [$it]" } ?: "")
+        }
+        renderRows(findViewById(R.id.geminiRows), snap.gemini, ContextCompat.getColor(this, R.color.gemini))
+
+        renderWindowToggles(findViewById(R.id.claudeWindows), snap.claude, "cl")
+        renderWindowToggles(findViewById(R.id.codexWindows), snap.codex, "cx")
+        renderWindowToggles(findViewById(R.id.geminiWindows), snap.gemini, "gm")
+
         findViewById<TextView>(R.id.updated).text =
             if (snap.fetchedAt > 0) "Updated ${df.format(Date(snap.fetchedAt))}" else "Never updated"
 
         renderPreview()
+    }
+
+    /**
+     * One checkbox per limit window: uncheck it and the widgets stop showing it. The
+     * headline number is always the fullest of the windows that remain checked, so
+     * "Claude weekly only" or "5-hour only" are both one tap. Stored as hidden labels,
+     * which is why a brand-new window from the API appears by default.
+     */
+    private fun renderWindowToggles(container: LinearLayout, state: ProviderState, key: String) {
+        container.removeAllViews()
+        if (!state.configured || state.windows.size < 2) {
+            container.visibility = View.GONE
+            return
+        }
+        container.visibility = View.VISIBLE
+        container.addView(TextView(this).apply {
+            text = "Widgets show:"
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text2))
+            textSize = 12f
+            setPadding(0, 0, (8 * resources.displayMetrics.density).toInt(), 0)
+        })
+        val hidden = Settings.hiddenWindows(this, key)
+        val allLabels = state.windows.map { it.label }
+        state.windows.forEach { w ->
+            container.addView(CheckBox(this).apply {
+                text = w.label
+                textSize = 12f
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text))
+                isChecked = w.label !in hidden
+                setOnCheckedChangeListener { _, checked ->
+                    val next = Settings.hiddenWindows(this@MainActivity, key).toMutableSet()
+                    if (checked) next.remove(w.label) else next.add(w.label)
+                    if (next.containsAll(allLabels)) {
+                        toast("Keep at least one window visible")
+                        isChecked = true
+                        return@setOnCheckedChangeListener
+                    }
+                    Settings.setHiddenWindows(this@MainActivity, key, next)
+                    applyWidgetChange()
+                }
+            })
+        }
     }
 
     private fun renderRows(container: LinearLayout, state: ProviderState, tint: Int) {

@@ -113,11 +113,105 @@ class UsageRepoTest {
     @Test
     fun `window naming survives an unexpected label`() {
         assertNotNull(WidgetRenderer.windowName("mystery"))
-        assertEquals("mystery · 7-day", WidgetRenderer.windowName("mystery"))
+        // Guessing a cadence for a label we don't recognise would be wrong —
+        // Gemini's per-model buckets ("Pro", "Flash") land here.
+        assertEquals("mystery limit", WidgetRenderer.windowName("mystery"))
+        assertEquals("Pro limit", WidgetRenderer.windowName("Pro"))
+        assertEquals("daily window", WidgetRenderer.windowName("daily"))
+    }
+
+    // ---- Gemini quota parsing --------------------------------------------
+
+    @Test
+    fun `gemini buckets become windows with used percent`() {
+        val body = """
+            {"buckets":[
+              {"modelId":"gemini-3-pro-preview","remainingFraction":0.63,"resetTime":"2026-07-26T03:00:00Z"},
+              {"modelId":"gemini-2.5-flash","remainingFraction":0.88,"resetTime":"2026-07-26T03:00:00Z"}]}
+        """.trimIndent()
+        val wins = GeminiApi.parseQuota(body)
+        assertEquals(listOf("Pro", "Flash"), wins.map { it.label })
+        assertEquals(37, wins[0].pct)   // 1 - 0.63 remaining
+        assertEquals(12, wins[1].pct)
+        assertTrue(wins[0].resetsAt > 0)
+    }
+
+    @Test
+    fun `duplicate gemini buckets keep the fullest one`() {
+        val body = """
+            {"buckets":[
+              {"modelId":"gemini-3-pro-preview","remainingFraction":0.9},
+              {"modelId":"gemini-3-pro-image","remainingFraction":0.2}]}
+        """.trimIndent()
+        val wins = GeminiApi.parseQuota(body)
+        assertEquals(1, wins.size)
+        assertEquals("Pro", wins[0].label)
+        assertEquals(80, wins[0].pct)   // the binding bucket wins
+    }
+
+    @Test
+    fun `an unrecognised gemini response is an error, not an empty success`() {
+        assertTrue(runCatching { GeminiApi.parseQuota("""{"something":1}""") }.isFailure)
+        assertTrue(runCatching { GeminiApi.parseQuota("""{"buckets":[]}""") }.isFailure)
+    }
+
+    @Test
+    fun `gemini tier names are prettified`() {
+        assertEquals("Free", GeminiApi.prettyTier("free-tier"))
+        assertEquals("Standard", GeminiApi.prettyTier("standard-tier"))
+        assertEquals(null, GeminiApi.prettyTier(null))
+    }
+
+    // ---- window selection -------------------------------------------------
+
+    @Test
+    fun `hiding a window promotes the next fullest to the headline`() {
+        val now = System.currentTimeMillis()
+        val state = ProviderState(
+            true,
+            listOf(Win("5h", 68, now), Win("7d", 31, now), Win("Opus", 12, now)),
+            null,
+        )
+        val filtered = WidgetRenderer.filterWindows(state, setOf("5h"))
+        assertEquals(listOf("7d", "Opus"), filtered.windows.map { it.label })
+        assertEquals("7d", WidgetRenderer.binding(filtered)?.label)
+    }
+
+    @Test
+    fun `hiding every window hides nothing`() {
+        val state = ProviderState(true, listOf(Win("5h", 68, 0), Win("7d", 31, 0)), null)
+        val filtered = WidgetRenderer.filterWindows(state, setOf("5h", "7d"))
+        assertEquals(2, filtered.windows.size)
     }
 
     @Test
     fun `binding window of an empty provider is null rather than a crash`() {
         assertNull(WidgetRenderer.binding(ProviderState(true, emptyList(), null)))
+    }
+
+    // ---- upgrade compatibility --------------------------------------------
+
+    @Test
+    fun `a snapshot stored by v2_3 (no gemini key) still loads`() {
+        val ctx = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        Prefs.setSnapshot(ctx, """
+            {"claude":{"w":[{"l":"5h","p":68,"r":0}],"e":"","plan":""},
+             "codex":{"w":[{"l":"7d","p":22,"r":0}],"e":"","plan":"plus"},
+             "fetchedAt":1234}
+        """.trimIndent())
+        val snap = UsageRepo.load(ctx)
+        assertEquals(68, snap.claude.windows.single().pct)
+        assertEquals(1234L, snap.fetchedAt)
+        assertTrue("gemini defaults to empty, not a crash", snap.gemini.windows.isEmpty())
+    }
+
+    @Test
+    fun `history stored by v2_3 (three-wide) reads gemini as unknown`() {
+        val ctx = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        Prefs.setHistory(ctx, "[[1000,50,20],[2000,55,22,7]]")
+        val h = UsageRepo.history(ctx)
+        assertEquals(2, h.size)
+        assertEquals(-1, h[0].gemini)
+        assertEquals(7, h[1].gemini)
     }
 }

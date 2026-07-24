@@ -70,5 +70,41 @@
                 android:resource="@xml/widget_info_graph" />
         </receiver>
 
+        <receiver
+            android:name=".BatteryWidgetProvider"
+            android:label="@string/widget_battery_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info_battery" />
+        </receiver>
+
+        <receiver
+            android:name=".CountdownWidgetProvider"
+            android:label="@string/widget_countdown_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info_countdown" />
+        </receiver>
+
+        <receiver
+            android:name=".TickerWidgetProvider"
+            android:label="@string/widget_ticker_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info_ticker" />
+        </receiver>
+
     </application>
 </manifest>

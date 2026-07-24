@@ -28,11 +28,11 @@ class WidgetRenderTest {
     private val now = System.currentTimeMillis()
 
     /** 24h of rising usage, sampled every 30 min — the shape the app accumulates. */
-    private val history: List<Triple<Long, Int, Int>> = buildList {
+    private val history: List<HistoryPoint> = buildList {
         var t = now - 24 * hour
         while (t <= now) {
             val k = (t - (now - 24 * hour)).toFloat() / (24 * hour)
-            add(Triple(t, (9 + 58 * k).toInt(), (6 + 34 * k).toInt()))
+            add(HistoryPoint(t, (9 + 58 * k).toInt(), (6 + 34 * k).toInt(), (4 + 20 * k).toInt()))
             t += 30 * 60_000L
         }
     }
@@ -49,10 +49,15 @@ class WidgetRenderTest {
         ),
         claudeErr: String? = null,
         codexConfigured: Boolean = true,
+        geminiWins: List<Win> = listOf(
+            Win("Pro", 37, now + 9 * hour),
+            Win("Flash", 12, now + 9 * hour),
+        ),
     ) = Snapshot(
         ProviderState(true, claudeWins, claudeErr),
         ProviderState(codexConfigured, codexWins, null, "plus"),
         now - 4 * 60_000,
+        ProviderState(true, geminiWins, null, "free-tier"),
     )
 
     /** Widgets are overwhelmingly seen on a dark home screen, so that is the default. */
@@ -170,21 +175,6 @@ class WidgetRenderTest {
         assertTrue("expected a sweep", n > 60)
     }
 
-    /** The One UI cell footprints a Galaxy S24 Ultra actually snaps widgets to. */
-    @Test
-    fun s24UltraGrid() {
-        dark()
-        // One UI width for n cells ≈ 70n−30 → 2:110, 3:180, 4:250, 5:320
-        val widths = intArrayOf(110, 180, 250, 320)
-        val heights = intArrayOf(75, 145, 215, 285)
-        for (w in widths) for (h in heights) {
-            shoot("s24-detail-${w}x$h", WidgetRenderer.Style.DETAIL, w.toFloat(), h.toFloat())
-        }
-        shoot("s24-bars-320x75", WidgetRenderer.Style.BARS, 320f, 75f)
-        shoot("s24-rings-180x145", WidgetRenderer.Style.RINGS, 180f, 145f)
-        shoot("s24-graph-320x215", WidgetRenderer.Style.GRAPH, 320f, 215f)
-    }
-
     @Test
     fun soloProvider() {
         dark()
@@ -199,6 +189,58 @@ class WidgetRenderTest {
         shoot("solo-graph-264x132", WidgetRenderer.Style.GRAPH, 264f, 132f, o = onlyClaude)
     }
 
+    /** The One UI cell footprints a Galaxy S24 Ultra actually snaps widgets to. */
+    @Test
+    fun s24UltraGrid() {
+        dark()
+        // One UI width for n cells ≈ 70n−30 → 2:110, 3:180, 4:250, 5:320
+        val widths = intArrayOf(110, 180, 250, 320)
+        val heights = intArrayOf(75, 145, 215, 285)
+        for (w in widths) for (h in heights) {
+            shoot("s24-detail-${w}x$h", WidgetRenderer.Style.DETAIL, w.toFloat(), h.toFloat())
+        }
+        shoot("s24-bars-320x75", WidgetRenderer.Style.BARS, 320f, 75f)
+        shoot("s24-rings-180x145", WidgetRenderer.Style.RINGS, 180f, 145f)
+        shoot("s24-graph-320x215", WidgetRenderer.Style.GRAPH, 320f, 215f)
+        shoot("s24-battery-180x75", WidgetRenderer.Style.BATTERY, 180f, 75f)
+        shoot("s24-countdown-250x75", WidgetRenderer.Style.COUNTDOWN, 250f, 75f)
+        shoot("s24-ticker-250x75", WidgetRenderer.Style.TICKER, 250f, 75f)
+    }
+
+    @Test
+    fun newStyles() {
+        dark()
+        shoot("battery-264x76", WidgetRenderer.Style.BATTERY, 264f, 76f)
+        shoot("battery-264x110", WidgetRenderer.Style.BATTERY, 264f, 110f)
+        shoot("countdown-264x76", WidgetRenderer.Style.COUNTDOWN, 264f, 76f)
+        shoot("countdown-264x110", WidgetRenderer.Style.COUNTDOWN, 264f, 110f)
+        shoot("ticker-264x44", WidgetRenderer.Style.TICKER, 264f, 44f)
+        shoot("ticker-264x60", WidgetRenderer.Style.TICKER, 264f, 60f)
+    }
+
+    /** Every style with all three providers on. */
+    @Test
+    fun threeProviders() {
+        dark()
+        val o = WidgetRenderer.Opts(showGemini = true)
+        for (style in WidgetRenderer.Style.entries) {
+            shoot("trio-${style.name.lowercase()}-264x160", style, 264f, 160f, o = o)
+            shoot("trio-${style.name.lowercase()}-264x76", style, 264f, 76f, o = o)
+        }
+        shoot("trio-detail-264x232", WidgetRenderer.Style.DETAIL, 264f, 232f, o = o)
+    }
+
+    /** Hiding windows changes which one leads. */
+    @Test
+    fun windowSelection() {
+        dark()
+        // Claude's binding window is 5h (68%); hiding it must promote 7d (31%).
+        val o = WidgetRenderer.Opts(hiddenClaude = setOf("5h", "Opus"))
+        shoot("winsel-weekly-only", WidgetRenderer.Style.DETAIL, 264f, 160f, o = o)
+        val (bmp, _) = WidgetRenderer.render(ctx, WidgetRenderer.Style.DETAIL, 264f, 160f, snap(), history, o = o)
+        assertTrue(bmp.width > 0)
+    }
+
     @Test
     fun displayOptions() {
         dark()
@@ -208,22 +250,6 @@ class WidgetRenderTest {
             o = WidgetRenderer.Opts(sparkline = false))
         shoot("opt-sparkline", WidgetRenderer.Style.DETAIL, 264f, 232f,
             o = WidgetRenderer.Opts(sparkline = true))
-    }
-
-    /** Gemini turned on: three panels, and an honest note where the percentage would be. */
-    @Test
-    fun geminiOptional() {
-        dark()
-        val base = snap()
-        val s = Snapshot(base.claude, base.codex, now - 4 * 60_000,
-            ProviderState(true, emptyList(), null, "AI Pro"))
-        val three = WidgetRenderer.Opts(showClaude = true, showCodex = true, showGemini = true)
-        shoot("gemini-detail-3-264x300", WidgetRenderer.Style.DETAIL, 264f, 300f, s, three)
-        shoot("gemini-detail-3-320x232", WidgetRenderer.Style.DETAIL, 320f, 232f, s, three)
-        shoot("gemini-rings-3-320x130", WidgetRenderer.Style.RINGS, 320f, 130f, s, three)
-        shoot("gemini-bars-3-264x104", WidgetRenderer.Style.BARS, 264f, 104f, s, three)
-        val solo = WidgetRenderer.Opts(showClaude = false, showCodex = false, showGemini = true)
-        shoot("gemini-solo-264x160", WidgetRenderer.Style.DETAIL, 264f, 160f, s, solo)
     }
 
     @Test

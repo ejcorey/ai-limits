@@ -140,6 +140,14 @@
                 android:orientation="vertical" />
 
             <LinearLayout
+                android:id="@+id/claudeWindows"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:visibility="gone" />
+
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
@@ -206,6 +214,14 @@
                 android:orientation="vertical" />
 
             <LinearLayout
+                android:id="@+id/codexWindows"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:visibility="gone" />
+
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
@@ -230,6 +246,80 @@
 
                 <Button
                     android:id="@+id/btnCodexSignOut"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:text="Out" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- ============ Gemini ============ -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/card_bg"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Gemini"
+                android:textColor="@color/gemini"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/geminiStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Not signed in"
+                android:textColor="@color/text2"
+                android:textSize="13sp" />
+
+            <LinearLayout
+                android:id="@+id/geminiRows"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:orientation="vertical" />
+
+            <LinearLayout
+                android:id="@+id/geminiWindows"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btnGeminiSignIn"
+                    style="@style/Widget.Material3.Button.TonalButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1.2"
+                    android:text="Sign in" />
+
+                <Button
+                    android:id="@+id/btnGeminiPaste"
+                    style="@style/Widget.Material3.Button.TonalButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:text="Paste link" />
+
+                <Button
+                    android:id="@+id/btnGeminiSignOut"
                     style="@style/Widget.Material3.Button.TextButton"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
@@ -273,28 +363,6 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="Show Gemini" />
-
-            <TextView
-                android:id="@+id/geminiHint"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Google publishes no usage-limit API for Gemini, so its card shows presence and plan only — no live percentage."
-                android:textColor="@color/text2"
-                android:textSize="11sp"
-                android:visibility="gone" />
-
-            <EditText
-                android:id="@+id/etGeminiPlan"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:hint="Gemini plan label (optional, e.g. AI Pro)"
-                android:inputType="textCapWords"
-                android:maxLines="1"
-                android:textColor="@color/text"
-                android:textColorHint="@color/text2"
-                android:textSize="14sp"
-                android:visibility="gone" />
 
             <TextView
                 android:id="@+id/soloHint"

@@ -40,9 +40,8 @@ object Settings {
         if (!on && !showClaude(ctx) && !showGemini(ctx)) p(ctx).edit().putBoolean("show_claude", true).apply()
     }
 
-    // Gemini is opt-in (default off): Google publishes no usage-limit API, so its panel
-    // is an honest presence card rather than a live percentage. An optional plan label
-    // is all there is to show.
+    // Gemini is opt-in (default off) so updating the app cannot dump a "tap to sign
+    // in" panel onto widgets people already laid out; signing in turns it on.
     fun showGemini(ctx: Context): Boolean = p(ctx).getBoolean("show_gemini", false)
 
     fun setShowGemini(ctx: Context, on: Boolean) {
@@ -50,19 +49,25 @@ object Settings {
         if (!on && !showClaude(ctx) && !showCodex(ctx)) p(ctx).edit().putBoolean("show_claude", true).apply()
     }
 
-    /** Optional plan label the user can attach to the Gemini card (e.g. "AI Pro"). */
-    fun geminiPlan(ctx: Context): String? =
-        p(ctx).getString("gemini_plan", null)?.trim()?.ifEmpty { null }
-
-    fun setGeminiPlan(ctx: Context, plan: String?) =
-        p(ctx).edit().putString("gemini_plan", plan?.trim().orEmpty()).apply()
-
     /** How many providers are on. */
     fun shownCount(ctx: Context): Int =
         (if (showClaude(ctx)) 1 else 0) + (if (showCodex(ctx)) 1 else 0) + (if (showGemini(ctx)) 1 else 0)
 
     /** True when exactly one provider is on — the widget then gets a roomier layout. */
     fun solo(ctx: Context): Boolean = shownCount(ctx) == 1
+
+    // --- which windows appear, per provider --------------------------------
+    // Stored as the labels the user has HIDDEN, so a brand-new window from the
+    // API shows up by default instead of being invisible until found in settings.
+    // Keys: "cl", "cx", "gm".
+
+    fun hiddenWindows(ctx: Context, key: String): Set<String> =
+        // getStringSet's return must never be mutated or handed back to putStringSet,
+        // so both directions copy.
+        HashSet(p(ctx).getStringSet("hide_$key", emptySet()) ?: emptySet())
+
+    fun setHiddenWindows(ctx: Context, key: String, hidden: Set<String>) =
+        p(ctx).edit().putStringSet("hide_$key", HashSet(hidden)).apply()
 
     // --- appearance --------------------------------------------------------
 

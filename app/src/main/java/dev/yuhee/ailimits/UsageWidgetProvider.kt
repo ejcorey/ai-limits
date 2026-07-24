@@ -56,3 +56,6 @@ class UsageWidgetProvider : BaseWidgetProvider() {
 class BarsWidgetProvider : BaseWidgetProvider()
 class PercentWidgetProvider : BaseWidgetProvider()
 class GraphWidgetProvider : BaseWidgetProvider()
+class BatteryWidgetProvider : BaseWidgetProvider()
+class CountdownWidgetProvider : BaseWidgetProvider()
+class TickerWidgetProvider : BaseWidgetProvider()

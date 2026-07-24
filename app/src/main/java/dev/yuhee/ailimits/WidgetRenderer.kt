@@ -53,6 +53,9 @@ object WidgetRenderer {
         val opacity: Int = 100,
         val projection: Boolean = true,
         val sparkline: Boolean = true,
+        val hiddenClaude: Set<String> = emptySet(),
+        val hiddenCodex: Set<String> = emptySet(),
+        val hiddenGemini: Set<String> = emptySet(),
     ) {
         val shown: Int get() =
             (if (showClaude) 1 else 0) + (if (showCodex) 1 else 0) + (if (showGemini) 1 else 0)
@@ -66,6 +69,9 @@ object WidgetRenderer {
         opacity = Settings.opacity(ctx),
         projection = Settings.showProjection(ctx),
         sparkline = Settings.showSparkline(ctx),
+        hiddenClaude = Settings.hiddenWindows(ctx, "cl"),
+        hiddenCodex = Settings.hiddenWindows(ctx, "cx"),
+        hiddenGemini = Settings.hiddenWindows(ctx, "gm"),
     )
 
     // -- tiers -------------------------------------------------------------
@@ -111,6 +117,9 @@ object WidgetRenderer {
         BarsWidgetProvider::class.java,
         PercentWidgetProvider::class.java,
         GraphWidgetProvider::class.java,
+        BatteryWidgetProvider::class.java,
+        CountdownWidgetProvider::class.java,
+        TickerWidgetProvider::class.java,
     )
 
     private fun ids(ctx: Context, cls: Class<*>): IntArray =
@@ -151,7 +160,7 @@ object WidgetRenderer {
         id: Int,
         cls: Class<*>,
         snap: Snapshot,
-        hist: List<Triple<Long, Int, Int>>,
+        hist: List<HistoryPoint>,
         t: Theme,
         o: Opts,
         refreshing: Boolean,
@@ -166,6 +175,9 @@ object WidgetRenderer {
             BarsWidgetProvider::class.java -> Style.BARS
             PercentWidgetProvider::class.java -> Style.RINGS
             GraphWidgetProvider::class.java -> Style.GRAPH
+            BatteryWidgetProvider::class.java -> Style.BATTERY
+            CountdownWidgetProvider::class.java -> Style.COUNTDOWN
+            TickerWidgetProvider::class.java -> Style.TICKER
             else -> Style.DETAIL
         }
         return compose(ctx, style, wDp, hDp, snap, hist, t, o, refreshing)
@@ -182,7 +194,7 @@ object WidgetRenderer {
         wDp: Float,
         hDp: Float,
         snap: Snapshot,
-        hist: List<Triple<Long, Int, Int>>,
+        hist: List<HistoryPoint>,
         t: Theme? = null,
         o: Opts = Opts(),
         refreshing: Boolean = false,
@@ -198,7 +210,7 @@ object WidgetRenderer {
         return rv
     }
 
-    enum class Style { DETAIL, BARS, RINGS, GRAPH }
+    enum class Style { DETAIL, BARS, RINGS, GRAPH, BATTERY, COUNTDOWN, TICKER }
 
     /**
      * Draws one widget at a given dp size. Separate from [build] so tests can render
@@ -212,7 +224,7 @@ object WidgetRenderer {
         wDp: Float,
         hDp: Float,
         snap: Snapshot,
-        hist: List<Triple<Long, Int, Int>>,
+        hist: List<HistoryPoint>,
         refreshing: Boolean = false,
         theme: Theme? = null,
         o: Opts = Opts(),
@@ -233,20 +245,40 @@ object WidgetRenderer {
             Style.BARS -> drawBars(pen, wDp, hDp, snap, t, o)
             Style.RINGS -> drawRings(pen, wDp, hDp, snap, t, o)
             Style.GRAPH -> drawGraph(pen, wDp, hDp, snap, hist, t, o)
+            Style.BATTERY -> drawBattery(pen, wDp, hDp, snap, t, o)
+            Style.COUNTDOWN -> drawCountdown(pen, wDp, hDp, snap, t, o)
+            Style.TICKER -> drawTicker(pen, wDp, hDp, snap, t, o)
             Style.DETAIL -> footer = drawDetail(pen, wDp, hDp, snap, hist, t, o, refreshing)
         }
         return bmp to footer
     }
 
-    /** The providers the user wants, paired with their history series. */
+    /**
+     * Removes the windows the user chose to hide. Hiding everything hides nothing:
+     * a provider with no windows at all would just read as broken.
+     */
+    internal fun filterWindows(state: ProviderState, hidden: Set<String>): ProviderState {
+        if (hidden.isEmpty() || state.windows.isEmpty()) return state
+        val kept = state.windows.filter { it.label !in hidden }
+        return if (kept.isEmpty()) state else state.copy(windows = kept)
+    }
+
+    /** The providers the user wants, window-filtered, paired with their history series. */
     private fun visible(
-        snap: Snapshot, hist: List<Triple<Long, Int, Int>>, t: Theme, o: Opts,
+        snap: Snapshot, hist: List<HistoryPoint>, t: Theme, o: Opts,
     ): List<Panel> = buildList {
-        if (o.showClaude) add(Panel(snap.claude, "Claude", t.claude, hist.map { it.first to it.second }))
-        if (o.showCodex) add(Panel(snap.codex, "Codex", t.codex, hist.map { it.first to it.third }))
-        // Google publishes no usage-limit API, so Gemini rides along as an honest
-        // presence panel (no fabricated %) — off unless the user turns it on.
-        if (o.showGemini) add(Panel(snap.gemini, "Gemini", t.gemini, emptyList(), noUsageApi = true))
+        fun panel(state: ProviderState, hidden: Set<String>, name: String, color: Int, series: List<Pair<Long, Int>>): Panel {
+            val filtered = filterWindows(state, hidden)
+            // History tracks the *unfiltered* binding window. If hiding windows changed
+            // which one leads, that series describes a different window — so everything
+            // derived from it (projection, burn rate, sparkline) is silently dropped by
+            // handing the panel no history at all, rather than fabricating a trend.
+            val sameHero = binding(filtered)?.label == binding(state)?.label
+            return Panel(filtered, name, color, if (sameHero) series else emptyList())
+        }
+        if (o.showClaude) add(panel(snap.claude, o.hiddenClaude, "Claude", t.claude, hist.map { it.t to it.claude }))
+        if (o.showCodex) add(panel(snap.codex, o.hiddenCodex, "Codex", t.codex, hist.map { it.t to it.codex }))
+        if (o.showGemini) add(panel(snap.gemini, o.hiddenGemini, "Gemini", t.gemini, hist.map { it.t to it.gemini }))
     }
 
     private class Panel(
@@ -254,8 +286,6 @@ object WidgetRenderer {
         val name: String,
         val color: Int,
         val series: List<Pair<Long, Int>>,
-        /** True for a provider that has no usage-limit API at all (Gemini): show an honest note. */
-        val noUsageApi: Boolean = false,
     )
 
     /** Keeps the bitmap crisp but well under the memory a RemoteViews update may carry. */
@@ -289,7 +319,7 @@ object WidgetRenderer {
     /** @return true when the footer (and therefore its tap region) was drawn. */
     private fun drawDetail(
         g: Pen, w: Float, h: Float, snap: Snapshot,
-        hist: List<Triple<Long, Int, Int>>, t: Theme, o: Opts, refreshing: Boolean,
+        hist: List<HistoryPoint>, t: Theme, o: Opts, refreshing: Boolean,
     ): Boolean {
         g.card(w, h, o.opacity)
         val panels = visible(snap, hist, t, o)
@@ -550,11 +580,9 @@ object WidgetRenderer {
         }
     }
 
-    /** Message for a panel with no readable window — honest for Gemini, which has no usage API. */
     private fun noWindowMsg(p: Panel): String = when {
         !p.state.configured -> "Tap to sign in"
         p.state.error != null -> shortError(p.state.error!!)
-        p.noUsageApi -> "No usage limit published"
         else -> "No data yet"
     }
 
@@ -622,8 +650,8 @@ object WidgetRenderer {
                         val full = shortWindow(b.label) + " · " + left(b.resetsAt) + " left"
                         if (g.measure(full, 10f, 500) <= colW) full else left(b.resetsAt) + " left"
                     }
-                    p.noUsageApi -> "no usage API"
-                    else -> "tap to sign in"
+                    !p.state.configured -> "tap to sign in"
+                    else -> "no data yet"
                 }
                 g.text(sub, x, cy + 20f, 10f, 500, t.faint)
             }
@@ -705,8 +733,8 @@ object WidgetRenderer {
             if (showSub) {
                 val sub = when {
                     b != null -> left(b.resetsAt) + " left"
-                    p.noUsageApi -> "no usage API"
-                    else -> "tap to sign in"
+                    !p.state.configured -> "tap to sign in"
+                    else -> "no data yet"
                 }
                 g.text(sub, cx, cy + r + 26f, 10f, 500, t.faint, Paint.Align.CENTER)
             }
@@ -758,11 +786,182 @@ object WidgetRenderer {
         }
     }
 
+
+    // --- battery ----------------------------------------------------------
+    // The inverse framing of every other style: not how much is spent, but how
+    // much fuel is left before the provider runs dry.
+
+    private fun drawBattery(g: Pen, w: Float, h: Float, snap: Snapshot, t: Theme, o: Opts) {
+        g.card(w, h, o.opacity)
+        val panels = visible(snap, hist = emptyList(), t = t, o = o)
+        if (panels.isEmpty()) return
+        val n = panels.size
+        val pad = 12f
+        val colW = (w - pad * 2) / n
+        val showName = h >= 74f
+        val showReset = h >= 100f
+        val bodyH = min(34f, h * .36f).coerceAtLeast(18f)
+        val bodyW = min(colW - 26f, bodyH * 2.3f).coerceAtLeast(36f)
+        val block = bodyH + (if (showName) 17f else 0f) + (if (showReset) 14f else 0f)
+        val topY = (h - block) / 2f
+
+        panels.forEachIndexed { i, p ->
+            val cx = pad + colW * i + colW / 2f
+            val b = binding(p.state)
+            val sc = if (b != null) t.status(b.pct, p.color) else t.faint
+            val bx = cx - bodyW / 2f
+
+            g.strokeRR(bx, topY, bodyW, bodyH, 5f, if (p.state.configured) t.dim else t.faint, 1.7f)
+            g.rrect(bx + bodyW + 2.5f, topY + bodyH * .3f, 4f, bodyH * .4f, 2f, t.dim)
+
+            if (b != null) {
+                val remaining = (100 - b.pct).coerceIn(0, 100)
+                val fw = (bodyW - 8f) * remaining / 100f
+                if (fw > 1f) g.rrect(bx + 4f, topY + 4f, fw, bodyH - 8f, 3f, sc)
+                g.text("$remaining%", cx, topY + bodyH / 2f + 4.5f, 13f, 700, t.text, Paint.Align.CENTER)
+            } else {
+                g.text("--", cx, topY + bodyH / 2f + 4.5f, 12f, 700, t.faint, Paint.Align.CENTER)
+            }
+            if (showName) {
+                g.text(p.name, cx, topY + bodyH + 14f, 10.5f, 700,
+                    if (p.state.configured) p.color else t.dim, Paint.Align.CENTER, .03f)
+            }
+            if (showReset) {
+                g.text(
+                    if (b != null) "resets " + left(b.resetsAt) else "tap to sign in",
+                    cx, topY + bodyH + 28f, 9.5f, 500, t.faint, Paint.Align.CENTER
+                )
+            }
+        }
+    }
+
+    // --- countdown --------------------------------------------------------
+    // Time-first: the headline is when you get your capacity back, not how much
+    // of it is gone. The thin bar underneath is how far through the window you are.
+
+    /** Wall-clock length of a window, inferred from its label; null when unknowable. */
+    internal fun windowLengthMs(label: String): Long? {
+        Regex("^(\\d+)([hd])$").find(label.lowercase())?.let { m ->
+            val v = m.groupValues[1].toLong()
+            return v * if (m.groupValues[2] == "h") 3600_000L else 86_400_000L
+        }
+        return when (label.lowercase()) {
+            "weekly" -> 7 * 86_400_000L
+            "daily" -> 86_400_000L
+            "primary" -> 5 * 3600_000L
+            else -> null
+        }
+    }
+
+    private fun drawCountdown(g: Pen, w: Float, h: Float, snap: Snapshot, t: Theme, o: Opts) {
+        g.card(w, h, o.opacity)
+        val panels = visible(snap, hist = emptyList(), t = t, o = o)
+        if (panels.isEmpty()) return
+        val n = panels.size
+        val pad = 12f
+        val colW = (w - pad * 2) / n
+        val showName = h >= 66f
+        val showSub = h >= 92f
+        val big = min(colW * .22f, 27f).coerceAtLeast(14f)
+        val block = (if (showName) 16f else 0f) + big + (if (showSub) 15f else 0f) + 10f
+        val topY = (h - block) / 2f
+        val now = System.currentTimeMillis()
+
+        panels.forEachIndexed { i, p ->
+            val cx = pad + colW * i + colW / 2f
+            val b = binding(p.state)
+            var y = topY
+            if (showName) {
+                g.circle(cx - g.measure(p.name, 10.5f, 700, .03f) / 2f - 9f, y + 6.5f, 3.4f,
+                    if (p.state.configured) p.color else t.faint)
+                g.text(p.name, cx, y + 10.5f, 10.5f, 700,
+                    if (p.state.configured) p.color else t.dim, Paint.Align.CENTER, .03f)
+                y += 16f
+            }
+            if (b == null) {
+                g.text(if (p.state.configured) "no data" else "sign in", cx, y + big * .8f,
+                    12f, 500, t.faint, Paint.Align.CENTER)
+                return@forEachIndexed
+            }
+            val urgent = b.resetsAt in 1 until now + 30 * 60_000L
+            g.text(left(b.resetsAt), cx, y + big * .8f, big, 700,
+                if (urgent) t.warn else t.text, Paint.Align.CENTER, -.01f)
+            y += big + 5f
+            if (showSub) {
+                g.text("${b.pct}% · " + shortWindow(b.label), cx, y + 9f, 10f, 500, t.dim, Paint.Align.CENTER)
+                y += 15f
+            }
+            // Elapsed-through-the-window bar, only when the label tells us its length.
+            val len = windowLengthMs(b.label)
+            if (len != null && b.resetsAt > now) {
+                val remainMs = (b.resetsAt - now).coerceAtMost(len)
+                val elapsed = 1f - remainMs.toFloat() / len
+                val bw = (colW - 28f).coerceAtLeast(26f)
+                g.bar(cx - bw / 2f, y + 2f, bw, 5f, (elapsed * 100).toInt(), t.status(b.pct, p.color))
+            }
+        }
+    }
+
+    // --- ticker -----------------------------------------------------------
+    // The densest possible readout: one line of text, every provider, no chrome.
+
+    private fun drawTicker(g: Pen, w: Float, h: Float, snap: Snapshot, t: Theme, o: Opts) {
+        g.card(w, h, o.opacity)
+        val panels = visible(snap, hist = emptyList(), t = t, o = o)
+        if (panels.isEmpty()) return
+        val twoLine = h >= 56f
+        val y1 = if (twoLine) h / 2f - 3f else h / 2f + 4.5f
+
+        class Seg(val name: String, val pct: String, val color: Int, val configured: Boolean)
+        val segs = panels.map { p ->
+            val b = binding(p.state)
+            Seg(p.name, if (b != null) "${b.pct}%" else "--",
+                if (b != null) t.status(b.pct, p.color) else t.faint, p.state.configured)
+        }
+        val sep = "   ·   "
+
+        fun width(withNames: Boolean): Float {
+            var total = 0f
+            segs.forEachIndexed { i, sg ->
+                total += 10f // dot + gap
+                if (withNames) total += g.measure(sg.name, 11.5f, 600, .01f) + 5f
+                total += g.measure(sg.pct, 13f, 700)
+                if (i < segs.size - 1) total += g.measure(sep, 11f, 500)
+            }
+            return total
+        }
+
+        val withNames = width(true) <= w - 24f
+        var x = (w - width(withNames)) / 2f
+        segs.forEachIndexed { i, sg ->
+            g.circle(x + 3.4f, y1 - 4f, 3.4f, if (sg.configured) sg.color else t.faint)
+            x += 10f
+            if (withNames) {
+                x += g.text(sg.name, x, y1, 11.5f, 600, if (sg.configured) t.dim else t.faint, tracking = .01f) + 5f
+            }
+            x += g.text(sg.pct, x, y1, 13f, 700, sg.color)
+            if (i < segs.size - 1) x += g.text(sep, x, y1, 11f, 500, t.faint)
+        }
+
+        if (twoLine) {
+            // The soonest reset is the next event that matters, whoever owns it.
+            val next = panels.mapNotNull { p ->
+                binding(p.state)?.takeIf { it.resetsAt > 0 }?.let { p.name to it }
+            }.minByOrNull { it.second.resetsAt }
+            if (next != null) {
+                g.text(
+                    "next reset " + left(next.second.resetsAt) + " · " + next.first,
+                    w / 2f, y1 + 18f, 9.5f, 500, t.faint, Paint.Align.CENTER
+                )
+            }
+        }
+    }
+
     // --- 24h history ------------------------------------------------------
 
     private fun drawGraph(
         g: Pen, w: Float, h: Float, snap: Snapshot,
-        hist: List<Triple<Long, Int, Int>>, t: Theme, o: Opts,
+        hist: List<HistoryPoint>, t: Theme, o: Opts,
     ) {
         g.card(w, h, o.opacity)
         val panels = visible(snap, hist, t, o)
@@ -929,7 +1128,12 @@ object WidgetRenderer {
             "weekly" -> "weekly window"
             "primary" -> "5-hour window"
             "now" -> "current window"
-            else -> "$label · 7-day"
+            "daily" -> "daily window"
+            // Claude's model-scoped windows are all weekly.
+            "opus", "sonnet", "haiku" -> "$label · 7-day"
+            // Anything else (e.g. Gemini's per-model buckets) gets a neutral name —
+            // guessing a cadence we don't know would be wrong.
+            else -> "$label limit"
         }
     }
 
@@ -1010,6 +1214,18 @@ object WidgetRenderer {
             p.textSize = size
             p.letterSpacing = tracking
             return p.measureText(s)
+        }
+
+        fun strokeRR(x: Float, y: Float, w: Float, h: Float, radius: Float, color: Int, width: Float) {
+            if (w <= 0f || h <= 0f) return
+            r.set(x, y, x + w, y + h)
+            p.style = Paint.Style.STROKE
+            p.shader = null
+            p.color = color
+            p.strokeWidth = width
+            val rad = min(radius, min(w, h) / 2f)
+            c.drawRoundRect(r, rad, rad, p)
+            p.style = Paint.Style.FILL
         }
 
         fun rrect(x: Float, y: Float, w: Float, h: Float, radius: Float, color: Int, shader: Shader? = null) {

@@ -76,6 +76,50 @@ object Prefs {
 
     fun clearCodexPending(ctx: Context) = p(ctx).edit().remove("cx_pending").apply()
 
+    // --- Gemini OAuth (Google) ---
+    fun geminiTokens(ctx: Context): Triple<String?, String?, Long> {
+        val p = p(ctx)
+        return Triple(p.getString("gm_access", null), p.getString("gm_refresh", null), p.getLong("gm_exp", 0))
+    }
+
+    fun setGeminiTokens(ctx: Context, access: String, refresh: String?, expMs: Long) {
+        p(ctx).edit().putString("gm_access", access).putString("gm_refresh", refresh).putLong("gm_exp", expMs).apply()
+    }
+
+    /** Google refresh tokens don't rotate, but the access token does; update it alone. */
+    fun setGeminiAccess(ctx: Context, access: String, expMs: Long) {
+        p(ctx).edit().putString("gm_access", access).putLong("gm_exp", expMs).apply()
+    }
+
+    fun clearGemini(ctx: Context) {
+        p(ctx).edit().remove("gm_access").remove("gm_refresh").remove("gm_exp")
+            .remove("gm_verifier").remove("gm_state").remove("gm_pending")
+            .remove("gm_project").remove("gm_tier").apply()
+    }
+
+    // PKCE in-flight state (survives process death while browser is open)
+    fun setGeminiFlow(ctx: Context, verifier: String, state: String) {
+        p(ctx).edit().putString("gm_verifier", verifier).putString("gm_state", state).apply()
+    }
+
+    fun geminiFlow(ctx: Context): Pair<String?, String?> =
+        Pair(p(ctx).getString("gm_verifier", null), p(ctx).getString("gm_state", null))
+
+    fun setGeminiPendingCode(ctx: Context, code: String) =
+        p(ctx).edit().putString("gm_pending", code).apply()
+
+    fun geminiPendingCode(ctx: Context): String? = p(ctx).getString("gm_pending", null)
+
+    fun clearGeminiPending(ctx: Context) = p(ctx).edit().remove("gm_pending").apply()
+
+    // The Cloud AI Companion project + tier from loadCodeAssist — stable per account,
+    // cached so usage polls don't repeat the onboarding round-trip.
+    fun geminiProject(ctx: Context): Pair<String?, String?> =
+        Pair(p(ctx).getString("gm_project", null), p(ctx).getString("gm_tier", null))
+
+    fun setGeminiProject(ctx: Context, project: String, tier: String?) =
+        p(ctx).edit().putString("gm_project", project).putString("gm_tier", tier).apply()
+
     // --- Last usage snapshot (JSON) ---
     fun snapshot(ctx: Context): String? = p(ctx).getString("snapshot", null)
     fun setSnapshot(ctx: Context, json: String) = p(ctx).edit().putString("snapshot", json).apply()

@@ -65,6 +65,7 @@ object Notifier {
         }
         scan("Claude", snap.claude)
         scan("Codex", snap.codex)
+        scan("Gemini", snap.gemini)
 
         // Drop keys for windows that have since reset, so the set cannot grow forever —
         // but only for a provider that actually reported this round. Pruning on a failed

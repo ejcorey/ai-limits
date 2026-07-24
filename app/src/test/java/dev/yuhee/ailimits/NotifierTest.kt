@@ -100,6 +100,19 @@ class NotifierTest {
     }
 
     @Test
+    fun `gemini windows alert too`() {
+        val snap = Snapshot(
+            ProviderState(false, emptyList(), null),
+            ProviderState(false, emptyList(), null),
+            now,
+            gemini = ProviderState(true, listOf(Win("Pro", 95, now + hour)), null),
+        )
+        Notifier.check(ctx, snap)
+        assertEquals(1, posted())
+        assertTrue(currentTitle()!!.contains("Gemini"))
+    }
+
+    @Test
     fun `an unconfigured provider never alerts`() {
         val snap = Snapshot(
             ProviderState(false, listOf(Win("5h", 99, now + hour)), null),
