@@ -11,8 +11,8 @@ android {
         applicationId "dev.yuhee.ailimits"
         minSdk 26
         targetSdk 35
-        versionCode 11
-        versionName "2.7"
+        versionCode 12
+        versionName "2.8"
     }
 
     // Local keystore is not committed; clones without it get an unsigned release build.
@@ -31,6 +31,12 @@ android {
             minifyEnabled false
             if (ks.exists()) signingConfig signingConfigs.release
         }
+    }
+
+    // So diagnostics can report the real version instead of a hand-typed string that
+    // silently went stale for three releases.
+    buildFeatures {
+        buildConfig true
     }
 
     compileOptions {

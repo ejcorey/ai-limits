@@ -235,6 +235,58 @@ class WidgetLogicTest {
         assertEquals("--:--", WidgetRenderer.resetClock(0, now))
     }
 
+    /**
+     * A zero-length window divided by zero, and because every NaN comparison is false
+     * the "too early to judge" guard let the result through as a confident "on pace".
+     */
+    @Test
+    fun `a zero-length window yields no pace rather than a wrong one`() {
+        val now = 1_700_000_000_000L
+        assertEquals(null, WidgetRenderer.windowLengthMs("0h"))
+        assertEquals(null, WidgetRenderer.pace(Win("0h", 60, now + 10 * 60_000), now))
+        assertEquals(null, WidgetRenderer.paceText(Win("0h", 60, now + 10 * 60_000), now))
+    }
+
+    /** A window that already reset describes the previous period, so it says nothing. */
+    @Test
+    fun `an expired window yields no pace`() {
+        val now = 1_700_000_000_000L
+        val expired = Win("5h", 90, now - 3 * 3600_000L, lengthMs = 5 * 3600_000L)
+        assertEquals(null, WidgetRenderer.pace(expired, now))
+        assertEquals(null, WidgetRenderer.paceText(expired, now))
+    }
+
+    /** The carried length wins over the label, which Codex rounds. */
+    @Test
+    fun `pace uses the reported span, not the rounded label`() {
+        val now = 1_700_000_000_000L
+        val thirtySix = 36 * 3600_000L
+        // Labelled "2d" by Codex's rounding, but truly 36h and only just started.
+        val w = Win("2d", 50, now + thirtySix - 60_000, lengthMs = thirtySix)
+        assertEquals("just-started window must stay silent", null, WidgetRenderer.pace(w, now))
+        // Without the carried length the label would have implied 48h and spoken.
+        assertEquals(48 * 3600_000L, WidgetRenderer.windowLengthMs("2d"))
+    }
+
+    /** This figure is what is LEFT, so rounding up would promise capacity that is gone. */
+    @Test
+    fun `counts round down, never up`() {
+        assertEquals("1.9K", WidgetRenderer.compactCount(1_950))
+        assertEquals("999.9K", WidgetRenderer.compactCount(999_999))
+        assertEquals("1M", WidgetRenderer.compactCount(1_000_000))
+        assertEquals("3.2M", WidgetRenderer.compactCount(3_299_999))
+    }
+
+    @Test
+    fun `a provider whose data stopped arriving is marked stale`() {
+        val now = 1_700_000_000_000L
+        val wins = listOf(Win("5h", 68, now + 3600_000L))
+        assertTrue(WidgetRenderer.isStale(ProviderState(true, wins, null, null, now - 3 * 3600_000L), now))
+        assertFalse(WidgetRenderer.isStale(ProviderState(true, wins, null, null, now - 60_000L), now))
+        // Never-fetched or signed-out providers are not "stale", they are simply empty.
+        assertFalse(WidgetRenderer.isStale(ProviderState(false, emptyList(), null), now))
+    }
+
     @Test
     fun `providers cannot both be hidden`() {
         val o = WidgetRenderer.Opts(showClaude = true, showCodex = false)

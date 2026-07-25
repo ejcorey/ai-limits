@@ -302,10 +302,15 @@ class MainActivity : AppCompatActivity() {
             "${wDp.toInt()} × ${hDp.toInt()} dp — drag to see it reflow"
     }
 
-    /** Persisted setting changed: redraw both the preview and any live widgets. */
+    /**
+     * Persisted setting changed: redraw the in-app preview immediately, and the placed
+     * widgets off the main thread. Each widget allocates and draws a bitmap up to the
+     * full pixel budget, so doing several inline made every toggle stutter.
+     */
     private fun applyWidgetChange() {
         renderPreview(force = true)
-        WidgetRenderer.updateAll(this)
+        val app = applicationContext
+        scope.launch(Dispatchers.Default) { WidgetRenderer.updateAll(app) }
     }
 
     // ---------------------------------------------------------------- helpers
@@ -339,12 +344,16 @@ class MainActivity : AppCompatActivity() {
     private fun copyDiagnostics() {
         val snap = UsageRepo.load(this)
         val sb = StringBuilder("Auspex diagnostics\n")
-        sb.append("version 2.4\n")
+        // Read from the build rather than retyped — this line silently claimed 2.4 for
+        // three releases because a hand-edit missed it.
+        sb.append("version ").append(BuildConfig.VERSION_NAME).append('\n')
         sb.append("updated: ").append(if (snap.fetchedAt > 0) Date(snap.fetchedAt).toString() else "never").append('\n')
         listOf("Claude" to snap.claude, "Codex" to snap.codex, "Gemini" to snap.gemini).forEach { (name, st) ->
             sb.append(name).append(": configured=").append(st.configured)
             st.plan?.let { sb.append(" plan=").append(it) }
-            st.error?.let { sb.append(" error=").append(it) }
+            // Summarised, not raw: a provider error can embed a server response body,
+            // and this text is offered for pasting into a bug report.
+            st.error?.let { sb.append(" error=").append(WidgetRenderer.shortError(it)) }
             sb.append('\n')
             st.windows.forEach { w ->
                 sb.append("  ").append(w.label).append(' ').append(w.pct).append("% resets ")
@@ -354,15 +363,16 @@ class MainActivity : AppCompatActivity() {
             }
         }
         sb.append("history points: ").append(UsageRepo.history(this).size).append('\n')
-        // Field names only — no values — so this is safe to paste anywhere. It is how we
-        // learn whether a provider has started publishing counts we could be showing.
+        // Field NAMES only, with anything that does not look like a field name redacted.
+        // This is how we learn whether a provider has started publishing counts we could
+        // be showing, without reproducing the values themselves.
         sb.append("response fields seen (names only):\n")
         listOf("claude", "codex", "gemini").forEach { k ->
             Prefs.responseKeys(this, k)?.let { sb.append("  ").append(k).append(": ").append(it).append('\n') }
         }
         (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager)
             .setPrimaryClip(ClipData.newPlainText("Auspex diagnostics", sb.toString()))
-        toast("Diagnostics copied — no tokens included")
+        toast("Diagnostics copied — usage figures only, no credentials")
     }
 
     /**
@@ -550,12 +560,16 @@ class MainActivity : AppCompatActivity() {
                 textSize = 12f
                 setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text))
                 isChecked = w.label !in hidden
-                setOnCheckedChangeListener { _, checked ->
+                setOnCheckedChangeListener { btn, checked ->
                     val next = Settings.hiddenWindows(this@MainActivity, key).toMutableSet()
                     if (checked) next.remove(w.label) else next.add(w.label)
                     if (next.containsAll(allLabels)) {
                         toast("Keep at least one window visible")
+                        // Detach while reverting: re-entering would write prefs and
+                        // re-render every widget to achieve nothing.
+                        btn.setOnCheckedChangeListener(null)
                         isChecked = true
+                        renderWindowToggles(container, state, key)
                         return@setOnCheckedChangeListener
                     }
                     Settings.setHiddenWindows(this@MainActivity, key, next)

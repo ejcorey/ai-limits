@@ -171,7 +171,7 @@ object GeminiApi {
             JSONObject().put("metadata", clientMetadata()).toString(),
             authHeaders(access),
         )
-        if (load.code !in 200..299) throw RuntimeException("Gemini setup failed (HTTP ${load.code}): ${load.body.take(160)}")
+        if (load.code !in 200..299) throw RuntimeException("Gemini setup failed (HTTP ${load.code})")
         val lj = JSONObject(load.body)
         val tier = lj.optJSONObject("paidTier")?.optString("id", "")?.ifEmpty { null }
             ?: lj.optJSONObject("currentTier")?.optString("id", "")?.ifEmpty { null }
@@ -186,7 +186,7 @@ object GeminiApi {
             .put("tierId", tier ?: "free-tier")
             .put("metadata", clientMetadata())
         var lro = Net.postJson("$ENDPOINT/v1internal:onboardUser", onboardReq.toString(), authHeaders(access))
-        if (lro.code !in 200..299) throw RuntimeException("Gemini onboarding failed (HTTP ${lro.code}): ${lro.body.take(160)}")
+        if (lro.code !in 200..299) throw RuntimeException("Gemini onboarding failed (HTTP ${lro.code})")
         var op = JSONObject(lro.body)
         var tries = 0
         while (!op.optBoolean("done", false) && tries < 6) {
@@ -225,7 +225,7 @@ object GeminiApi {
                 authHeaders(access),
             )
         }
-        if (r.code !in 200..299) throw RuntimeException("Gemini usage failed (HTTP ${r.code}): ${r.body.take(160)}")
+        if (r.code !in 200..299) throw RuntimeException("Gemini usage failed (HTTP ${r.code})")
         Schema.record(ctx, "gemini", r.body)
         return parseQuota(r.body) to prettyTier(tier)
     }

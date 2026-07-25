@@ -121,16 +121,27 @@ object ClaudeApi {
     internal fun parseUsage(body: String): List<Win> {
         val j = JSONObject(body)
         val out = mutableListOf<Win>()
-        fun add(key: String, label: String) {
+        // Claude's windows are fixed by the endpoint's own field names, so the span is
+        // known exactly rather than parsed out of a label.
+        fun add(key: String, label: String, lengthMs: Long) {
             val o = j.optJSONObject(key) ?: return
             val pct = o.optDouble("utilization", Double.NaN)
             if (pct.isNaN()) return
-            out.add(Win(label, Math.round(pct).toInt().coerceIn(0, 100), parseIso(o.optString("resets_at", ""))))
+            out.add(
+                Win(
+                    label,
+                    Math.round(pct).toInt().coerceIn(0, 100),
+                    parseIso(o.optString("resets_at", "")),
+                    lengthMs = lengthMs,
+                )
+            )
         }
-        add("five_hour", "5h")
-        add("seven_day", "7d")
-        add("seven_day_opus", "Opus")
-        add("seven_day_sonnet", "Sonnet")
+        val fiveHours = 5 * 3600_000L
+        val sevenDays = 7 * 86_400_000L
+        add("five_hour", "5h", fiveHours)
+        add("seven_day", "7d", sevenDays)
+        add("seven_day_opus", "Opus", sevenDays)
+        add("seven_day_sonnet", "Sonnet", sevenDays)
         // A 200 whose shape we no longer recognise must fail, not succeed with nothing:
         // the caller only preserves the previous snapshot when this throws, so returning
         // an empty list would quietly overwrite good data and report no error.

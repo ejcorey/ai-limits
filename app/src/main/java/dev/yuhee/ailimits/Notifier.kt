@@ -52,13 +52,32 @@ object Notifier {
         val fresh = mutableListOf<Triple<String, Win, Int>>()
         val reporting = mutableSetOf<String>()
 
+        // A window is "the same window" when its reset lands near the one we recorded.
+        // Exact-instant matching was fragile: Codex derives its reset from the clock, so
+        // the value drifts a second per poll and any bucketing boundary it crossed made
+        // the key look new — which pruned the old one and re-announced a window that had
+        // already been announced. Real rollovers move the reset by hours, far past this.
+        fun sameWindow(stored: String, name: String, w: Win): Boolean {
+            val cut = stored.lastIndexOf('|')
+            if (cut <= 0) return false
+            if (stored.substring(0, cut) != "$name|${w.label}") return false
+            val storedReset = stored.substring(cut + 1).toLongOrNull() ?: return false
+            return kotlin.math.abs(storedReset - w.resetsAt) <= 30 * 60_000L
+        }
+
         fun scan(name: String, state: ProviderState) {
             if (!state.configured || state.windows.isEmpty()) return
+            // Never interrupt someone over numbers that are no longer current. A failed
+            // refresh keeps the last good windows, and alerting off those could announce
+            // a threshold from hours ago — or one the window has since reset past.
+            if (state.fetchedAt <= 0 || System.currentTimeMillis() - state.fetchedAt > 60 * 60_000L) return
             reporting += name
             state.windows.forEach { w ->
-                val key = "$name|${w.label}|${w.resetsAt}"
-                live += key
-                if (w.pct >= threshold && key !in already) {
+                val announced = already.filter { sameWindow(it, name, w) }
+                // Keep the key we already stored, so its reset value does not creep with
+                // the clock and eventually drift out of tolerance.
+                live += announced.ifEmpty { listOf("$name|${w.label}|${w.resetsAt}") }
+                if (w.pct >= threshold && announced.isEmpty()) {
                     fresh += Triple(name, w, w.pct)
                 }
             }
@@ -71,8 +90,20 @@ object Notifier {
         // but only for a provider that actually reported this round. Pruning on a failed
         // fetch (which reports no windows) would forget what has been announced and
         // re-alert the moment it recovers.
+        // Keys survive while their window is still being reported. A provider that is
+        // signed out or silent keeps its keys rather than having them forgotten and
+        // re-announced on recovery; a provider that IS reporting drops the keys whose
+        // windows have genuinely rolled over.
+        val configuredNames = buildSet {
+            if (snap.claude.configured) add("Claude")
+            if (snap.codex.configured) add("Codex")
+            if (snap.gemini.configured) add("Gemini")
+        }
         val kept = already.filterTo(mutableSetOf()) { key ->
-            key in live || key.substringBefore('|') !in reporting
+            val owner = key.substringBefore('|')
+            // Signing out of a provider clears its keys for good.
+            if (owner !in configuredNames) return@filterTo false
+            key in live || owner !in reporting
         }
 
         fresh.forEach { (name, w, pct) ->

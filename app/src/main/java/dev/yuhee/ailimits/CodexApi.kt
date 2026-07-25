@@ -195,10 +195,16 @@ object CodexApi {
             val pct = w.optDouble("used_percent", Double.NaN)
             if (pct.isNaN()) return
             val secs = w.optLong("limit_window_seconds", 0)
+            // Label from the exact duration where it divides cleanly, and never round to
+            // zero: sub-30-minute windows used to become "0h", which downstream read as a
+            // zero-length window and divided by it. The true span rides along separately,
+            // so an inexact label can no longer produce a wrong calculation.
             val label = when {
-                secs in 1 until 86400 -> "${Math.round(secs / 3600.0)}h"
-                secs >= 86400 -> "${Math.round(secs / 86400.0)}d"
-                else -> "now"
+                secs <= 0L -> "now"
+                secs < 3600L -> "${(secs / 60).coerceAtLeast(1)}m"
+                secs % 86400L == 0L -> "${secs / 86400}d"
+                secs % 3600L == 0L -> "${secs / 3600}h"
+                else -> "${(secs / 3600).coerceAtLeast(1)}h+"
             }
             var resetMs = w.optLong("reset_at", 0) * 1000
             if (resetMs == 0L) {
@@ -212,7 +218,14 @@ object CodexApi {
                     resetMs = (approx / 300_000L) * 300_000L
                 }
             }
-            out.add(Win(label, Math.round(pct).toInt().coerceIn(0, 100), resetMs))
+            out.add(
+                Win(
+                    label,
+                    Math.round(pct).toInt().coerceIn(0, 100),
+                    resetMs,
+                    lengthMs = (secs * 1000).takeIf { secs > 0 },
+                )
+            )
         }
         add("primary_window")
         add("secondary_window")

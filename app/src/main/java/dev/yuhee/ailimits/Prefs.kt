@@ -19,7 +19,7 @@ object Prefs {
 
     fun clearClaude(ctx: Context) {
         p(ctx).edit().remove("cl_access").remove("cl_refresh").remove("cl_exp")
-            .remove("cl_verifier").remove("cl_state").apply()
+            .remove("cl_verifier").remove("cl_state").remove("keys_claude").apply()
     }
 
     // PKCE in-flight state (survives process death while browser is open)
@@ -56,7 +56,8 @@ object Prefs {
     fun clearCodex(ctx: Context) {
         p(ctx).edit().remove("cx_access").remove("cx_refresh").remove("cx_id")
             .remove("cx_account").remove("cx_exp")
-            .remove("cx_verifier").remove("cx_state").remove("cx_pending").apply()
+            .remove("cx_verifier").remove("cx_state").remove("cx_pending")
+            .remove("keys_codex").apply()
     }
 
     // PKCE in-flight state (survives process death while browser is open)
@@ -94,7 +95,7 @@ object Prefs {
     fun clearGemini(ctx: Context) {
         p(ctx).edit().remove("gm_access").remove("gm_refresh").remove("gm_exp")
             .remove("gm_verifier").remove("gm_state").remove("gm_pending")
-            .remove("gm_project").remove("gm_tier").apply()
+            .remove("gm_project").remove("gm_tier").remove("keys_gemini").apply()
     }
 
     // PKCE in-flight state (survives process death while browser is open)
@@ -130,7 +131,10 @@ object Prefs {
         p(ctx).getString("keys_$provider", null)
 
     fun setResponseKeys(ctx: Context, provider: String, keys: String) =
-        p(ctx).edit().putString("keys_$provider", keys.take(600)).apply()
+        // Marked when cut, so a truncated tail is never mistaken for a real field name.
+        p(ctx).edit()
+            .putString("keys_$provider", if (keys.length <= 600) keys else keys.take(597) + "…")
+            .apply()
 
     // --- Last usage snapshot (JSON) ---
     fun snapshot(ctx: Context): String? = p(ctx).getString("snapshot", null)

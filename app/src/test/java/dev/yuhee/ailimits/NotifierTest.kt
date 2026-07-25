@@ -37,8 +37,8 @@ class NotifierTest {
             .allNotifications.firstOrNull()
             ?.extras?.getString(android.app.Notification.EXTRA_TITLE)
 
-    private fun snapAt(pct: Int, resetsAt: Long) = Snapshot(
-        ProviderState(true, listOf(Win("5h", pct, resetsAt)), null),
+    private fun snapAt(pct: Int, resetsAt: Long, fetchedAt: Long = now) = Snapshot(
+        ProviderState(true, listOf(Win("5h", pct, resetsAt)), null, null, fetchedAt),
         ProviderState(false, emptyList(), null),
         now,
     )
@@ -105,11 +105,48 @@ class NotifierTest {
             ProviderState(false, emptyList(), null),
             ProviderState(false, emptyList(), null),
             now,
-            gemini = ProviderState(true, listOf(Win("Pro", 95, now + hour)), null),
+            gemini = ProviderState(true, listOf(Win("Pro", 95, now + hour)), null, null, now),
         )
         Notifier.check(ctx, snap)
         assertEquals(1, posted())
         assertTrue(currentTitle()!!.contains("Gemini"))
+    }
+
+    /**
+     * A failed refresh keeps the last good windows, so without a freshness gate the app
+     * would announce a threshold read hours ago — for a window that has since reset.
+     */
+    @Test
+    fun `stale carried-over data never alerts`() {
+        Notifier.check(ctx, snapAt(95, now + hour, fetchedAt = now - 3 * hour))
+        assertEquals(0, posted())
+
+        // The same numbers, freshly fetched, do alert.
+        Notifier.check(ctx, snapAt(95, now + hour, fetchedAt = now))
+        assertEquals(1, posted())
+    }
+
+    /**
+     * Codex derives its reset from the clock, so the value drifts slightly every poll.
+     * Keying on the exact instant meant a drift across a bucket boundary looked like a
+     * brand-new window and re-announced one already announced.
+     */
+    @Test
+    fun `a reset that drifts slightly is still the same window`() {
+        val reset = now + 2 * hour
+        Notifier.check(ctx, snapAt(92, reset))
+        assertEquals(1, posted())
+        assertTrue(currentTitle()!!.contains("92%"))
+
+        // Drift of a few minutes in either direction must not re-alert.
+        Notifier.check(ctx, snapAt(96, reset + 4 * 60_000))
+        Notifier.check(ctx, snapAt(97, reset - 7 * 60_000))
+        assertEquals(1, posted())
+        assertTrue("drift must not re-announce", currentTitle()!!.contains("92%"))
+
+        // A genuine rollover moves the reset by hours, and must speak again.
+        Notifier.check(ctx, snapAt(91, now + 7 * hour))
+        assertTrue("a real new window should alert", currentTitle()!!.contains("91%"))
     }
 
     @Test

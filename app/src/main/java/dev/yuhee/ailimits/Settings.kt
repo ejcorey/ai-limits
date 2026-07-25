@@ -30,24 +30,28 @@ object Settings {
     fun showClaude(ctx: Context): Boolean = p(ctx).getBoolean("show_claude", true)
     fun showCodex(ctx: Context): Boolean = p(ctx).getBoolean("show_codex", true)
 
-    fun setShowClaude(ctx: Context, on: Boolean) {
-        p(ctx).edit().putBoolean("show_claude", on).apply()
-        if (!on && !showCodex(ctx)) p(ctx).edit().putBoolean("show_codex", true).apply()
-    }
+    fun setShowClaude(ctx: Context, on: Boolean) = setShown(ctx, "show_claude", on)
 
-    fun setShowCodex(ctx: Context, on: Boolean) {
-        p(ctx).edit().putBoolean("show_codex", on).apply()
-        if (!on && !showClaude(ctx) && !showGemini(ctx)) p(ctx).edit().putBoolean("show_claude", true).apply()
+    fun setShowCodex(ctx: Context, on: Boolean) = setShown(ctx, "show_codex", on)
+
+    /**
+     * Turning the last visible provider off is refused — it just comes back on. Written
+     * once for all three: the per-provider versions had drifted, and the Claude one
+     * checked only Codex, so hiding Claude force-enabled Codex even when Gemini was
+     * already showing. That pushed a "tap to sign in" panel onto laid-out widgets.
+     */
+    private fun setShown(ctx: Context, key: String, on: Boolean) {
+        p(ctx).edit().putBoolean(key, on).apply()
+        if (!on && !showClaude(ctx) && !showCodex(ctx) && !showGemini(ctx)) {
+            p(ctx).edit().putBoolean(key, true).apply()
+        }
     }
 
     // Gemini is opt-in (default off) so updating the app cannot dump a "tap to sign
     // in" panel onto widgets people already laid out; signing in turns it on.
     fun showGemini(ctx: Context): Boolean = p(ctx).getBoolean("show_gemini", false)
 
-    fun setShowGemini(ctx: Context, on: Boolean) {
-        p(ctx).edit().putBoolean("show_gemini", on).apply()
-        if (!on && !showClaude(ctx) && !showCodex(ctx)) p(ctx).edit().putBoolean("show_claude", true).apply()
-    }
+    fun setShowGemini(ctx: Context, on: Boolean) = setShown(ctx, "show_gemini", on)
 
     /** How many providers are on. */
     fun shownCount(ctx: Context): Int =
@@ -112,7 +116,9 @@ object Settings {
 
     /** Windows already announced, keyed to their reset time so each period fires once. */
     fun firedAlerts(ctx: Context): Set<String> =
-        p(ctx).getStringSet("notify_fired", emptySet()) ?: emptySet()
+        // Copied for the same reason as hiddenWindows: getStringSet returns the live
+        // prefs instance, and the absent-key default is an immutable EmptySet.
+        HashSet(p(ctx).getStringSet("notify_fired", emptySet()) ?: emptySet())
 
     fun setFiredAlerts(ctx: Context, keys: Set<String>) =
         p(ctx).edit().putStringSet("notify_fired", keys).apply()

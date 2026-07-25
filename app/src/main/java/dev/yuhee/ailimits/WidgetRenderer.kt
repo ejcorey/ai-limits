@@ -18,6 +18,7 @@ import android.util.Log
 import android.view.View
 import android.widget.RemoteViews
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlin.math.max
@@ -294,11 +295,16 @@ object WidgetRenderer {
     )
 
     /**
-     * Pixel budget for one widget bitmap. At 4 bytes per pixel this caps a single
-     * RemoteViews payload at ~2 MB, which is what keeps a large widget clear of
-     * TransactionTooLargeException.
+     * Pixel budget for one widget bitmap — 400k px ≈ 1.6 MB at 4 bytes per pixel.
+     *
+     * Deliberately not justified by the Binder transaction limit: that limit is 1 MB per
+     * process and a bitmap this size exceeds it, so if it applied nothing here would ever
+     * have worked. Large bitmaps are passed out-of-band through ashmem instead, which is
+     * why it does. The budget exists to bound allocation — several placed widgets are
+     * redrawn together on every refresh — and 1.6 MB is the figure v2.6 shipped and ran
+     * on a real device, rather than a number reasoned up from a comment.
      */
-    internal const val PIXEL_BUDGET = 520_000f
+    internal const val PIXEL_BUDGET = 400_000f
 
     /**
      * Keeps the bitmap crisp but inside [PIXEL_BUDGET]. Solved rather than stepped: the
@@ -418,9 +424,9 @@ object WidgetRenderer {
         val cw = w - pad * 2
         val b = binding(p.state)
 
-        g.circle(x + 4f, pad + 6f, 4f, if (p.state.configured) p.color else t.faint)
+        g.circle(x + 4f, pad + 6f, 4f, dotColor(p.state, p.color, t))
         var cx = x + 13f
-        cx += g.text(p.name, cx, pad + 10.5f, 13f, 700, if (p.state.configured) p.color else t.dim, tracking = .035f) + 7f
+        cx += g.text(p.name, cx, pad + 10.5f, 13f, 700, nameColor(p.state, p.color, t), tracking = .035f) + 7f
         val plan = if (p.state.configured) prettyPlan(p.state.plan) else null
         if (plan != null) cx += g.chip(plan, cx, pad - 1f, p.color) + 7f
 
@@ -520,9 +526,9 @@ object WidgetRenderer {
         val med = tier == MEDIUM
         val b = binding(st)
 
-        g.circle(x + 4f, y + 6.5f, 3.8f, if (st.configured) color else t.faint)
+        g.circle(x + 4f, y + 6.5f, 3.8f, dotColor(st, color, t))
         var cx = x + 13f
-        cx += g.text(name, cx, y + 11f, 13f, 700, if (st.configured) color else t.dim, tracking = .035f) + 7f
+        cx += g.text(name, cx, y + 11f, 13f, 700, nameColor(st, color, t), tracking = .035f) + 7f
         val plan = if (st.configured) prettyPlan(st.plan) else null
         if (plan != null) cx += g.chip(plan, cx, y - 0.5f, color) + 7f
 
@@ -665,17 +671,17 @@ object WidgetRenderer {
             val b = binding(p.state)
             val sc = if (b != null) t.status(b.pct, p.color) else t.faint
             val cy = h / 2f
-            val nameColor = if (p.state.configured) p.color else t.dim
+            val nameCol = nameColor(p.state, p.color, t)
             if (roomy) {
-                g.circle(x + 4f, cy - 11f, 3.5f, if (p.state.configured) p.color else t.faint)
-                g.text(p.name, x + 13f, cy - 7f, 11f, 700, nameColor, tracking = .03f)
+                g.circle(x + 4f, cy - 11f, 3.5f, dotColor(p.state, p.color, t))
+                g.text(p.name, x + 13f, cy - 7f, 11f, 700, nameCol, tracking = .03f)
                 val numW = g.text(if (b != null) "${b.pct}%" else "--", x + colW, cy - 7f, 14f, 700, sc, Paint.Align.RIGHT)
                 if (b != null && colW >= 128f) {
                     g.text("USED", x + colW - numW - 5f, cy - 7f, 8f, 700, t.dim, Paint.Align.RIGHT, .06f)
                 }
             } else {
                 // Too narrow for both: the number is what matters, keep only a colour cue.
-                g.circle(x + 4f, cy - 10f, 3.5f, if (p.state.configured) p.color else t.faint)
+                g.circle(x + 4f, cy - 10f, 3.5f, dotColor(p.state, p.color, t))
                 g.text(if (b != null) "${b.pct}%" else "--", x + colW, cy - 6f, 14f, 700, sc, Paint.Align.RIGHT)
             }
             g.bar(x, cy, colW, 9f, b?.pct ?: 0, sc)
@@ -801,10 +807,10 @@ object WidgetRenderer {
             val y = top + i * rowH
             val b = binding(p.state)
             val sc = if (b != null) t.status(b.pct, p.color) else t.faint
-            g.circle(pad + 3.5f, y + 6.5f, 3.4f, if (p.state.configured) p.color else t.faint)
+            g.circle(pad + 3.5f, y + 6.5f, 3.4f, dotColor(p.state, p.color, t))
             if (showName) {
                 g.text(p.name, pad + 12f, y + 11f, 11f, 700,
-                    if (p.state.configured) p.color else t.dim, tracking = .03f)
+                    nameColor(p.state, p.color, t), tracking = .03f)
             }
             g.bar(barX, y + 4f, barW, 9f, b?.pct ?: 0, sc)
             val numRight = barX + barW + pctW
@@ -832,15 +838,21 @@ object WidgetRenderer {
      * and Countdown fall back to this once their column is too narrow to draw their own
      * figure without colliding with the neighbour.
      */
-    private fun drawDense(g: Pen, w: Float, h: Float, panels: List<Panel>, t: Theme) {
-        data class Seg(val pct: String, val color: Int, val configured: Boolean)
+    private fun drawDense(
+        g: Pen, w: Float, h: Float, panels: List<Panel>, t: Theme, showRemaining: Boolean = false,
+    ) {
+        data class Seg(val pct: String, val color: Int, val state: ProviderState, val base: Int)
         val segs = panels.map { p ->
             val b = binding(p.state)
-            Seg(
-                if (b != null) "${b.pct}%" else "--",
-                if (b != null) t.status(b.pct, p.color) else t.faint,
-                p.state.configured,
-            )
+            // showRemaining exists so Battery's fallback keeps Battery's meaning. Without
+            // it the same widget showed 65% (left) and, once dragged narrower, 35% (used)
+            // with no label change either way.
+            val value = when {
+                b == null -> "--"
+                showRemaining -> "${100 - b.pct}%"
+                else -> "${b.pct}%"
+            }
+            Seg(value, if (b != null) t.status(b.pct, p.color) else t.faint, p.state, p.color)
         }
 
         fun layout(size: Float, gap: Float, dot: Float): Float =
@@ -860,7 +872,7 @@ object WidgetRenderer {
         var x = (w - layout(size, gap, dot)) / 2f
         val baseY = h / 2f + size * .36f
         segs.forEach { sg ->
-            g.circle(x + dot, baseY - size * .32f, dot, if (sg.configured) sg.color else t.faint)
+            g.circle(x + dot, baseY - size * .32f, dot, dotColor(sg.state, sg.base, t))
             x += dot * 2 + 3f
             x += g.text(sg.pct, x, baseY, size, 700, sg.color) + gap
         }
@@ -875,7 +887,7 @@ object WidgetRenderer {
         val colW = (w - pad * 2) / n
         // A battery needs room for its body, cap and the gap to its neighbour. Below
         // that the bodies used to overlap and the percentages ran together.
-        if (colW < 46f) { drawDense(g, w, h, panels, t); return }
+        if (colW < 46f) { drawDense(g, w, h, panels, t, showRemaining = true); return }
         val showName = h >= 74f
         val showReset = h >= 100f
         val bodyH = min(34f, h * .36f).coerceAtLeast(18f)
@@ -907,14 +919,22 @@ object WidgetRenderer {
                 g.text("--", cx, topY + bodyH / 2f + 4.5f, 12f, 700, t.faint, Paint.Align.CENTER)
             }
             if (showName) {
-                g.text(p.name, cx, topY + bodyH + 14f, 10.5f, 700,
-                    if (p.state.configured) p.color else t.dim, Paint.Align.CENTER, .03f)
+                // The figure inside the body is what is LEFT, so the caption says so —
+                // every other style reports percent USED, and an unlabelled number in a
+                // battery is the one place the two could be confused.
+                val caption = if (b != null) "${p.name} · left" else p.name
+                val cs = if (g.measure(caption, 10.5f, 700, .03f) <= colW - 6f) caption else p.name
+                g.text(cs, cx, topY + bodyH + 14f, 10.5f, 700,
+                    nameColor(p.state, p.color, t), Paint.Align.CENTER, .03f)
             }
             if (showReset) {
-                // With a real count available, "1.2M tokens left" beats repeating the reset.
+                // A count belongs to one window, so it is named — Battery is otherwise the
+                // only style that shows a figure without saying which window it describes.
                 val tokens = if (o.tokens && b != null) remainingText(b) else null
+                val named = if (tokens != null && b != null) "${b.label} · $tokens" else null
                 val sub = when {
                     b == null -> "tap to sign in"
+                    named != null && g.measure(named, 9.5f, 500) <= colW - 8f -> named
                     tokens != null && g.measure(tokens, 9.5f, 500) <= colW - 8f -> tokens
                     else -> "resets " + left(b.resetsAt)
                 }
@@ -929,9 +949,15 @@ object WidgetRenderer {
 
     /** Wall-clock length of a window, inferred from its label; null when unknowable. */
     internal fun windowLengthMs(label: String): Long? {
-        Regex("^(\\d+)([hd])$").find(label.lowercase())?.let { m ->
+        Regex("^(\\d+)([mhd])$").find(label.lowercase())?.let { m ->
             val v = m.groupValues[1].toLong()
-            return v * if (m.groupValues[2] == "h") 3600_000L else 86_400_000L
+            val unit = when (m.groupValues[2]) {
+                "m" -> 60_000L
+                "h" -> 3600_000L
+                else -> 86_400_000L
+            }
+            // A zero span is not a span. Returning 0 here is what produced NaN downstream.
+            return (v * unit).takeIf { it > 0L }
         }
         return when (label.lowercase()) {
             "weekly" -> 7 * 86_400_000L
@@ -964,9 +990,9 @@ object WidgetRenderer {
             var y = topY
             if (showName) {
                 g.circle(cx - g.measure(p.name, 10.5f, 700, .03f) / 2f - 9f, y + 6.5f, 3.4f,
-                    if (p.state.configured) p.color else t.faint)
+                    dotColor(p.state, p.color, t))
                 g.text(p.name, cx, y + 10.5f, 10.5f, 700,
-                    if (p.state.configured) p.color else t.dim, Paint.Align.CENTER, .03f)
+                    nameColor(p.state, p.color, t), Paint.Align.CENTER, .03f)
                 y += 16f
             }
             if (b == null) {
@@ -987,12 +1013,14 @@ object WidgetRenderer {
                 y += 15f
             }
             // Elapsed-through-the-window bar, only when the label tells us its length.
-            val len = windowLengthMs(b.label)
+            val len = (b.lengthMs ?: windowLengthMs(b.label))?.takeIf { it > 0L }
             if (len != null && b.resetsAt > now) {
                 val remainMs = (b.resetsAt - now).coerceAtMost(len)
-                val elapsed = 1f - remainMs.toFloat() / len
-                val bw = (colW - 28f).coerceAtLeast(26f)
-                g.bar(cx - bw / 2f, y + 2f, bw, 5f, (elapsed * 100).toInt(), t.status(b.pct, p.color))
+                val elapsed = (1f - remainMs.toFloat() / len.toFloat()).coerceIn(0f, 1f)
+                if (elapsed.isFinite()) {
+                    val bw = (colW - 28f).coerceAtLeast(26f)
+                    g.bar(cx - bw / 2f, y + 2f, bw, 5f, (elapsed * 100).toInt(), t.status(b.pct, p.color))
+                }
             }
         }
     }
@@ -1007,11 +1035,22 @@ object WidgetRenderer {
         val twoLine = h >= 56f
         val y1 = if (twoLine) h / 2f - 3f else h / 2f + 4.5f
 
-        class Seg(val name: String, val pct: String, val color: Int, val configured: Boolean)
+        class Seg(
+            val name: String,
+            val pct: String,
+            val color: Int,
+            val state: ProviderState,
+            val base: Int,
+        )
         val segs = panels.map { p ->
             val b = binding(p.state)
-            Seg(p.name, if (b != null) "${b.pct}%" else "--",
-                if (b != null) t.status(b.pct, p.color) else t.faint, p.state.configured)
+            Seg(
+                p.name,
+                if (b != null) "${b.pct}%" else "--",
+                if (b != null) t.status(b.pct, p.color) else t.faint,
+                p.state,
+                p.color,
+            )
         }
         val sep = "   ·   "
 
@@ -1035,10 +1074,10 @@ object WidgetRenderer {
         }
         var x = (w - width(withNames)) / 2f
         segs.forEachIndexed { i, sg ->
-            g.circle(x + 3.4f, y1 - 4f, 3.4f, if (sg.configured) sg.color else t.faint)
+            g.circle(x + 3.4f, y1 - 4f, 3.4f, dotColor(sg.state, sg.base, t))
             x += 10f
             if (withNames) {
-                x += g.text(sg.name, x, y1, 11.5f, 600, if (sg.configured) t.dim else t.faint, tracking = .01f) + 5f
+                x += g.text(sg.name, x, y1, 11.5f, 600, if (sg.state.configured) t.dim else t.faint, tracking = .01f) + 5f
             }
             x += g.text(sg.pct, x, y1, 13f, 700, sg.color)
             if (i < segs.size - 1) x += g.text(sep, x, y1, 11f, 500, t.faint)
@@ -1143,6 +1182,36 @@ object WidgetRenderer {
 
     // --- data helpers -----------------------------------------------------
 
+    /**
+     * True when this provider's own numbers have stopped arriving, whatever the others
+     * are doing. A failed refresh keeps the last good windows, so without this a revoked
+     * token looked identical to healthy data.
+     */
+    internal fun isStale(st: ProviderState, now: Long = System.currentTimeMillis()): Boolean =
+        st.configured && st.windows.isNotEmpty() &&
+            (st.fetchedAt <= 0L || now - st.fetchedAt > 60 * 60_000L)
+
+    /**
+     * Colour for a provider's identity dot. Amber means "these numbers are old" — the
+     * one cue every style can afford, since they all already draw this dot.
+     */
+    private fun dotColor(st: ProviderState, color: Int, t: Theme): Int = when {
+        !st.configured -> t.faint
+        isStale(st) -> t.warn
+        else -> color
+    }
+
+    /**
+     * Colour for a provider's NAME, in the styles that draw no identity dot. Same amber
+     * signal as [dotColor] so "these numbers are old" is visible in every style, not just
+     * the ones that happen to have a dot to tint.
+     */
+    private fun nameColor(st: ProviderState, color: Int, t: Theme): Int = when {
+        !st.configured -> t.dim
+        isStale(st) -> t.warn
+        else -> color
+    }
+
     /** The binding constraint: the fullest window is what actually limits you. */
     internal fun binding(state: ProviderState): Win? = state.windows.maxByOrNull { it.pct }
 
@@ -1227,12 +1296,19 @@ object WidgetRenderer {
      * (1% into a 5-hour window, any usage looks like 50x), so it stays silent until 8%.
      */
     internal fun pace(w: Win, now: Long = System.currentTimeMillis()): Float? {
-        val len = windowLengthMs(w.label) ?: return null
-        if (w.resetsAt <= 0) return null
+        // Prefer the span the provider reported; the label is only a fallback for
+        // snapshots written before it was carried. Zero length is rejected outright —
+        // it used to divide by zero, and because every NaN comparison is false the
+        // "too early to judge" guard let the result through as a confident "on pace".
+        val len = (w.lengthMs ?: windowLengthMs(w.label))?.takeIf { it > 0L } ?: return null
+        // A reset already behind us means the window has rolled over: the percentage we
+        // hold describes the previous period, so there is nothing honest to compute.
+        if (w.resetsAt <= now) return null
         val remain = (w.resetsAt - now).coerceIn(0L, len)
-        val elapsed = 1f - remain.toFloat() / len
-        if (elapsed < .08f) return null
-        return (w.pct / 100f) / elapsed
+        val elapsed = 1f - remain.toFloat() / len.toFloat()
+        if (!elapsed.isFinite() || elapsed < .08f) return null
+        val ratio = (w.pct / 100f) / elapsed
+        return if (ratio.isFinite()) ratio else null
     }
 
     /** Pace as a phrase, plus whether it is steep enough to colour. */
@@ -1266,14 +1342,22 @@ object WidgetRenderer {
     /** 950 -> "950", 12_400 -> "12.4K", 3_200_000 -> "3.2M". */
     internal fun compactCount(n: Long): String = when {
         n < 1_000 -> n.toString()
-        n < 1_000_000 -> trimZero(n / 1_000.0) + "K"
-        n < 1_000_000_000 -> trimZero(n / 1_000_000.0) + "M"
-        else -> trimZero(n / 1_000_000_000.0) + "B"
+        n < 1_000_000 -> floor1(n, 1_000L) + "K"
+        n < 1_000_000_000 -> floor1(n, 1_000_000L) + "M"
+        else -> floor1(n, 1_000_000_000L) + "B"
     }
 
-    private fun trimZero(v: Double): String {
-        val s = String.format(Locale.US, "%.1f", v)
-        return if (s.endsWith(".0")) s.dropLast(2) else s
+    /**
+     * Truncates to one decimal instead of rounding. This figure is what is LEFT, so
+     * rounding up would promise capacity that is not there — 1,950 must not read as
+     * "2K". Truncating also keeps 999,999 as "999.9K" rather than the nonsensical
+     * "1000K" that half-up rounding produced.
+     */
+    private fun floor1(n: Long, unit: Long): String {
+        val tenths = (n * 10) / unit
+        val whole = tenths / 10
+        val frac = tenths % 10
+        return if (frac == 0L) whole.toString() else "$whole.$frac"
     }
 
     /**
@@ -1283,8 +1367,18 @@ object WidgetRenderer {
      */
     internal fun resetClock(ms: Long, now: Long = System.currentTimeMillis()): String {
         if (ms <= 0) return "--:--"
-        val far = ms - now >= 20 * 3600_000L
-        val fmt = if (far) "EEE HH:mm" else "HH:mm"
+        // Decided on the calendar, not an elapsed-hours threshold: 19h55m out could be
+        // tomorrow morning, where a bare "09:00" reads as a time already past today.
+        // Past six days a weekday repeats and reads as *this* week, so use a date.
+        val cal = Calendar.getInstance().apply { timeInMillis = ms }
+        val today = Calendar.getInstance().apply { timeInMillis = now }
+        val sameDay = cal.get(Calendar.YEAR) == today.get(Calendar.YEAR) &&
+            cal.get(Calendar.DAY_OF_YEAR) == today.get(Calendar.DAY_OF_YEAR)
+        val fmt = when {
+            sameDay -> "HH:mm"
+            ms - now < 6 * 86_400_000L -> "EEE HH:mm"
+            else -> "d MMM HH:mm"
+        }
         return SimpleDateFormat(fmt, Locale.getDefault()).format(Date(ms))
     }
 
@@ -1306,9 +1400,17 @@ object WidgetRenderer {
 
     /** The old widget showed a bare "5h" / "7d". Say what it means. */
     fun windowName(label: String): String {
-        Regex("^(\\d+)([hd])$").find(label.lowercase())?.let { m ->
-            val n = m.groupValues[1]
-            return if (m.groupValues[2] == "h") "$n-hour window" else "$n-day window"
+        // "5h+" (an inexact Codex span) falls through to the generic branch on purpose.
+        Regex("^(\\d+)([mhd])$").find(label.lowercase())?.let { m ->
+            val n = m.groupValues[1].toLong()
+            if (n > 0L) {
+                val unit = when (m.groupValues[2]) {
+                    "m" -> "minute"
+                    "h" -> "hour"
+                    else -> "day"
+                }
+                return "$n-$unit window"
+            }
         }
         return when (label.lowercase()) {
             "weekly" -> "weekly window"
@@ -1337,7 +1439,8 @@ object WidgetRenderer {
         return if (pretty.length <= 18) pretty else pretty.take(17) + "…"
     }
 
-    private fun shortError(e: String): String = when {
+    /** Collapses a provider error to a phrase, dropping any server text it embedded. */
+    internal fun shortError(e: String): String = when {
         e.contains("sign in", true) || e.contains("expired", true) -> "Sign-in expired"
         e.contains("429") -> "Rate limited"
         else -> "Update failed"

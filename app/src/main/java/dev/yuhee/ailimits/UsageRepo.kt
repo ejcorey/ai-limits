@@ -19,6 +19,14 @@ data class Win(
     val resetsAt: Long,
     val remaining: Long? = null,
     val unit: String? = null,
+    /**
+     * How long the window spans, when the provider tells us. Carried rather than
+     * inferred from [label]: Codex rounds its label from `limit_window_seconds`, so a
+     * 36-hour window arrives labelled "2d" and anything under 30 minutes becomes "0h".
+     * Deriving a length from that produced wrong answers and, for "0h", a divide by zero.
+     * Null means genuinely unknown, and everything that needs a length stays silent.
+     */
+    val lengthMs: Long? = null,
 )
 
 data class ProviderState(
@@ -26,6 +34,13 @@ data class ProviderState(
     val windows: List<Win>,
     val error: String?,
     val plan: String? = null,
+    /**
+     * When THIS provider's numbers were last actually retrieved. Per-provider because a
+     * single snapshot-wide timestamp let one dead provider hide behind its healthy
+     * siblings: its stale percentages were drawn under a fresh "updated 14:32".
+     * 0 means never.
+     */
+    val fetchedAt: Long = 0,
 )
 
 /**
@@ -90,6 +105,7 @@ object UsageRepo {
                     // (genuinely exhausted) stays distinguishable from absent.
                     o.optLong("n", -1L).takeIf { it >= 0 },
                     o.optString("u", "").ifEmpty { null },
+                    o.optLong("len", 0L).takeIf { it > 0 },
                 )
             )
         }
@@ -97,7 +113,9 @@ object UsageRepo {
             configured,
             wins,
             j.optString("e", "").ifEmpty { null },
-            j.optString("plan", "").ifEmpty { null })
+            j.optString("plan", "").ifEmpty { null },
+            j.optLong("t", 0L),
+        )
     }
 
     private fun providerJson(s: ProviderState): JSONObject {
@@ -106,9 +124,11 @@ object UsageRepo {
             arr.put(
                 JSONObject().put("l", w.label).put("p", w.pct).put("r", w.resetsAt)
                     .put("n", w.remaining ?: -1L).put("u", w.unit ?: "")
+                    .put("len", w.lengthMs ?: 0L)
             )
         }
         return JSONObject().put("w", arr).put("e", s.error ?: "").put("plan", s.plan ?: "")
+            .put("t", s.fetchedAt)
     }
 
     /**
@@ -122,6 +142,7 @@ object UsageRepo {
     @Synchronized
     fun fetchAll(ctx: Context): Snapshot {
         val prev = load(ctx)
+        val now = System.currentTimeMillis()
         var claudeOk = false
         var codexOk = false
         var geminiOk = false
@@ -131,9 +152,11 @@ object UsageRepo {
         } else try {
             val wins = ClaudeApi.usage(ctx)
             claudeOk = true
-            ProviderState(true, wins, null)
+            ProviderState(true, wins, null, null, now)
         } catch (e: Exception) {
-            ProviderState(true, prev.claude.windows, e.message ?: "fetch failed")
+            // Keep the last good numbers, but keep their original timestamp with them so
+            // the widget can show that this provider specifically has gone quiet.
+            ProviderState(true, prev.claude.windows, e.message ?: "fetch failed", null, prev.claude.fetchedAt)
         }
 
         val codex: ProviderState = if (!configuredCodex(ctx)) {
@@ -141,9 +164,9 @@ object UsageRepo {
         } else try {
             val (wins, plan) = CodexApi.usage(ctx)
             codexOk = true
-            ProviderState(true, wins, null, plan)
+            ProviderState(true, wins, null, plan, now)
         } catch (e: Exception) {
-            ProviderState(true, prev.codex.windows, e.message ?: "fetch failed", prev.codex.plan)
+            ProviderState(true, prev.codex.windows, e.message ?: "fetch failed", prev.codex.plan, prev.codex.fetchedAt)
         }
 
         val gemini: ProviderState = if (!configuredGemini(ctx)) {
@@ -151,16 +174,16 @@ object UsageRepo {
         } else try {
             val (wins, tier) = GeminiApi.usage(ctx)
             geminiOk = true
-            ProviderState(true, wins, null, tier)
+            ProviderState(true, wins, null, tier, now)
         } catch (e: Exception) {
-            ProviderState(true, prev.gemini.windows, e.message ?: "fetch failed", prev.gemini.plan)
+            ProviderState(true, prev.gemini.windows, e.message ?: "fetch failed", prev.gemini.plan, prev.gemini.fetchedAt)
         }
 
         // fetchedAt means "when this data was last actually retrieved". Stamping it on a
         // failed round would show hours-old numbers as current and make the widget's
         // stale warning unreachable, since that warning is keyed off this very field.
         val anyFresh = claudeOk || codexOk || geminiOk
-        val fetchedAt = if (anyFresh) System.currentTimeMillis() else prev.fetchedAt
+        val fetchedAt = if (anyFresh) now else prev.fetchedAt
         val snap = Snapshot(claude, codex, fetchedAt, gemini)
         val j = JSONObject()
             .put("claude", providerJson(claude))

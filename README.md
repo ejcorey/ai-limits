@@ -47,7 +47,7 @@ All of these change the widgets immediately, with a live preview in the app:
 - **Burn-projection warning** and **trend sparklines** can each be turned off.
 - **Alerts** — get notified when a window passes 75/80/90/95%. Fires once per window per reset period, not on every refresh.
 - **Auto-refresh** every 15 min / 30 min / 1 h / 2 h.
-- **Copy diagnostics** puts the current state on the clipboard, including the *field names* each provider last returned (names only, never values). That is how a new token count would be spotted rather than assumed absent. No credentials are included.
+- **Copy diagnostics** puts the current state on the clipboard, including the *field names* each provider last returned. Names only, with anything that does not look like a field name redacted — a payload keyed by account id or email must not put that identifier into text you are invited to paste into a bug report. Error text is summarised rather than raw, because a provider error can embed a server response body. Usage figures and plan tier are included; credentials never are.
 
 ## What it shows
 
@@ -62,6 +62,7 @@ All of these change the widgets immediately, with a live preview in the app:
 - **Colour escalates** with pressure: provider colour under 75%, amber to 90%, red above.
 - **Burn projection**: if recent history says you will hit the cap before the window resets, the header switches to "on pace to cap 16:52".
 - Tall or sparkline-less widgets fill the freed space with the stats line rather than leaving a gap.
+- **Per-provider staleness**: if one provider stops answering, its name and dot turn amber in every style. A failed refresh keeps the last good numbers, so without this a revoked token looked identical to healthy data.
 - A stale-data dot appears if the last successful fetch is over an hour old.
 
 ## How it works

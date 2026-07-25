@@ -204,6 +204,28 @@ class WidgetRenderTest {
             o = onlyGemini.copy(pace = false))
     }
 
+    /**
+     * One provider going quiet must be visible. Before this, a revoked token showed
+     * hours-old percentages under a fresh "updated 14:32" with no cue at all, and six
+     * of the seven styles had no staleness indication whatsoever.
+     */
+    @Test
+    fun oneProviderGoneQuiet() {
+        dark()
+        val stale = Snapshot(
+            // Claude last answered three hours ago; the others are current.
+            ProviderState(true, listOf(Win("5h", 68, now + 3 * hour)), "Sign in expired", null, now - 3 * hour),
+            ProviderState(true, listOf(Win("5h", 41, now + hour)), null, "plus", now),
+            now,
+            ProviderState(true, listOf(Win("Pro", 37, now + 9 * hour, 1_240_000, "TOKENS")), null, "free-tier", now),
+        )
+        val o = WidgetRenderer.Opts(showGemini = true)
+        for (style in WidgetRenderer.Style.entries) {
+            shoot("stale-${style.name.lowercase()}", style, 264f, 160f, stale, o)
+        }
+        shoot("stale-detail-tall", WidgetRenderer.Style.DETAIL, 264f, 232f, stale, o)
+    }
+
     @Test
     fun soloProvider() {
         dark()
