@@ -87,6 +87,19 @@ object Settings {
     fun setShowSparkline(ctx: Context, on: Boolean) =
         p(ctx).edit().putBoolean("show_sparkline", on).apply()
 
+    /**
+     * Prefer an absolute count over a percentage where the provider reports one.
+     * Only Gemini does today, so this changes nothing for a Claude/Codex-only setup.
+     */
+    fun showTokens(ctx: Context): Boolean = p(ctx).getBoolean("show_tokens", true)
+    fun setShowTokens(ctx: Context, on: Boolean) =
+        p(ctx).edit().putBoolean("show_tokens", on).apply()
+
+    /** Compare spend against how much of the window has elapsed. */
+    fun showPace(ctx: Context): Boolean = p(ctx).getBoolean("show_pace", true)
+    fun setShowPace(ctx: Context, on: Boolean) =
+        p(ctx).edit().putBoolean("show_pace", on).apply()
+
     // --- notifications -----------------------------------------------------
 
     fun notifyEnabled(ctx: Context): Boolean = p(ctx).getBoolean("notify", false)

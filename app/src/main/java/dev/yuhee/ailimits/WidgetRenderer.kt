@@ -23,6 +23,7 @@ import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 private fun withAlpha(color: Int, alpha: Int): Int =
     (color and 0x00FFFFFF) or ((alpha.coerceIn(0, 255)) shl 24)
@@ -53,6 +54,8 @@ object WidgetRenderer {
         val opacity: Int = 100,
         val projection: Boolean = true,
         val sparkline: Boolean = true,
+        val tokens: Boolean = true,
+        val pace: Boolean = true,
         val hiddenClaude: Set<String> = emptySet(),
         val hiddenCodex: Set<String> = emptySet(),
         val hiddenGemini: Set<String> = emptySet(),
@@ -69,6 +72,8 @@ object WidgetRenderer {
         opacity = Settings.opacity(ctx),
         projection = Settings.showProjection(ctx),
         sparkline = Settings.showSparkline(ctx),
+        tokens = Settings.showTokens(ctx),
+        pace = Settings.showPace(ctx),
         hiddenClaude = Settings.hiddenWindows(ctx, "cl"),
         hiddenCodex = Settings.hiddenWindows(ctx, "cx"),
         hiddenGemini = Settings.hiddenWindows(ctx, "gm"),
@@ -288,12 +293,28 @@ object WidgetRenderer {
         val series: List<Pair<Long, Int>>,
     )
 
-    /** Keeps the bitmap crisp but well under the memory a RemoteViews update may carry. */
-    private fun scaleFor(ctx: Context, wDp: Float, hDp: Float): Float {
-        var s = ctx.resources.displayMetrics.density.coerceIn(1.5f, 3f)
-        while (wDp * s * hDp * s > 520_000f && s > 1.25f) s -= 0.25f
-        return s
+    /**
+     * Pixel budget for one widget bitmap. At 4 bytes per pixel this caps a single
+     * RemoteViews payload at ~2 MB, which is what keeps a large widget clear of
+     * TransactionTooLargeException.
+     */
+    internal const val PIXEL_BUDGET = 520_000f
+
+    /**
+     * Keeps the bitmap crisp but inside [PIXEL_BUDGET]. Solved rather than stepped: the
+     * old loop bottomed out at 1.25 and silently blew the budget on very large widgets,
+     * so the guarantee held only as long as the declared max size happened to stay small.
+     */
+    internal fun scaleFor(density: Float, wDp: Float, hDp: Float): Float {
+        val area = (wDp * hDp).coerceAtLeast(1f)
+        val fits = sqrt(PIXEL_BUDGET / area)
+        // Never below 1.0 — a dp-for-pixel bitmap is soft but still legible, and going
+        // finer than that would make a huge widget unreadable to save memory nobody needs.
+        return min(density.coerceIn(1.5f, 3f), fits).coerceAtLeast(1f)
     }
+
+    private fun scaleFor(ctx: Context, wDp: Float, hDp: Float): Float =
+        scaleFor(ctx.resources.displayMetrics.density, wDp, hDp)
 
     // --- pending intents --------------------------------------------------
 
@@ -411,7 +432,7 @@ object WidgetRenderer {
         val sc = t.status(b.pct, p.color)
         val proj = if (o.projection) projection(b, p.series) else null
         val head = if (proj != null) "on pace to cap " + clock(proj)
-        else "resets " + clock(b.resetsAt) + " · " + left(b.resetsAt) + " left"
+        else "resets " + resetClock(b.resetsAt) + " · " + left(b.resetsAt) + " left"
         // Measure at the weight it is actually drawn at — the warning is heavier than
         // the plain reset text, so measuring at 500 let it overflow the fit guard.
         val headWeight = if (proj != null) 600 else 500
@@ -436,10 +457,21 @@ object WidgetRenderer {
         val nameY = heroBase + 17f
         g.text(windowName(b.label), x, nameY, 11f, 500, t.dim, tracking = .02f)
         // Fill the room beside the window name with what is left and how fast it is going.
+        // Prefer a real count over a percentage, then append the widest trend phrase that
+        // fits beside the window name — burn and pace both, if there is room for both.
+        val tokens = if (o.tokens) remainingText(b) else null
+        val headroom = tokens ?: "${100 - b.pct}% left"
         val burn = burnText(p.series)
-        val stat = "${100 - b.pct}% left" + (burn?.let { " · " + it.first } ?: "")
+        val pace = if (o.pace) paceText(b) else null
+        val both = if (burn != null && pace != null) {
+            (burn.first + " · " + pace.first) to (burn.second || pace.second)
+        } else null
+        val room = cw - g.measure(windowName(b.label), 11f, 500) - 14f
+        val trend = listOfNotNull(both, burn, pace)
+            .firstOrNull { g.measure(headroom + " · " + it.first, 11f, 500) <= room }
+        val stat = headroom + (trend?.let { " · " + it.first } ?: "")
         g.text(stat, x + cw, nameY, 11f, 500,
-            if (burn?.second == true) t.warn else t.faint, Paint.Align.RIGHT)
+            if (trend?.second == true) t.warn else t.faint, Paint.Align.RIGHT)
 
         // Every other window gets a real row, its bar in a column shared with the others.
         val rest = p.state.windows.filter { it !== b }
@@ -503,7 +535,7 @@ object WidgetRenderer {
         val sc = t.status(b.pct, color)
         val proj = if (o.projection) projection(b, series) else null
         val head = if (proj != null) "on pace to cap " + clock(proj)
-        else "resets " + clock(b.resetsAt) + " · " + left(b.resetsAt) + " left"
+        else "resets " + resetClock(b.resetsAt) + " · " + left(b.resetsAt) + " left"
         val headWeight = if (proj != null) 600 else 500
         val headColor = if (proj != null) t.warn else t.faint
         // Medium carries the reset on its own meta line, so only the taller tiers
@@ -523,11 +555,14 @@ object WidgetRenderer {
             g.text("USED", x + w - pw - 6f, y + 29f, 9f, 700, t.dim, Paint.Align.RIGHT, .06f)
             // A stub bar reads as noise; below a useful width the number carries alone.
             if (w - rightCol >= 32f) g.bar(x, y + 19f, w - rightCol, 10f, b.pct, sc)
-            // Drop meta segments from the end until the line fits a narrow widget.
+            // Drop meta segments from the end until the line fits a narrow widget. A real
+            // count replaces the percentage when the provider gave us one.
             val left = 100 - b.pct
+            val headroom = (if (o.tokens) remainingText(b) else null) ?: "$left% left"
             val meta = listOf(
-                shortWindow(b.label) + " · " + left + "% left · resets " + clock(b.resetsAt),
-                "$left% left · resets " + clock(b.resetsAt),
+                shortWindow(b.label) + " · " + headroom + " · resets " + resetClock(b.resetsAt),
+                headroom + " · resets " + resetClock(b.resetsAt),
+                headroom,
                 "$left% left",
             ).firstOrNull { g.measure(it, 10f, 500) <= w } ?: "$left% left"
             g.text(meta, x, y + 41f, 10f, 500, t.faint)
@@ -573,10 +608,10 @@ object WidgetRenderer {
         var top = y + 64f
         if (wantSpark) {
             var sh = blockBottom - top - 2f
-            if (sh >= 34f) { drawStats(g, x, top + 9f, w, b, series, t); top += 17f; sh -= 17f }
+            if (sh >= 34f) { drawStats(g, x, top + 9f, w, b, series, t, o); top += 17f; sh -= 17f }
             if (sh >= 16f) sparkline(g, x, top, w, blockBottom - top - 2f, series, color, t)
         } else if (blockBottom - top >= 7f) {
-            drawStats(g, x, top + 9f, w, b, series, t)
+            drawStats(g, x, top + 9f, w, b, series, t, o)
         }
     }
 
@@ -791,6 +826,46 @@ object WidgetRenderer {
     // The inverse framing of every other style: not how much is spent, but how
     // much fuel is left before the provider runs dry.
 
+    /**
+     * The floor shared by the three compact styles: a dot and a percentage per provider
+     * on one centred line, with the type stepped down until it genuinely fits. Battery
+     * and Countdown fall back to this once their column is too narrow to draw their own
+     * figure without colliding with the neighbour.
+     */
+    private fun drawDense(g: Pen, w: Float, h: Float, panels: List<Panel>, t: Theme) {
+        data class Seg(val pct: String, val color: Int, val configured: Boolean)
+        val segs = panels.map { p ->
+            val b = binding(p.state)
+            Seg(
+                if (b != null) "${b.pct}%" else "--",
+                if (b != null) t.status(b.pct, p.color) else t.faint,
+                p.state.configured,
+            )
+        }
+
+        fun layout(size: Float, gap: Float, dot: Float): Float =
+            segs.sumOf { (g.measure(it.pct, size, 700) + dot * 2 + 3f).toDouble() }.toFloat() +
+                gap * (segs.size - 1)
+
+        // Shrink, then tighten the gap, before giving up and using the smallest.
+        var size = 13f
+        var gap = 9f
+        var dot = 3.2f
+        while (size > 8f && layout(size, gap, dot) > w - 10f) {
+            size -= .5f
+            gap = max(3f, gap - .4f)
+            dot = max(1.8f, dot - .12f)
+        }
+
+        var x = (w - layout(size, gap, dot)) / 2f
+        val baseY = h / 2f + size * .36f
+        segs.forEach { sg ->
+            g.circle(x + dot, baseY - size * .32f, dot, if (sg.configured) sg.color else t.faint)
+            x += dot * 2 + 3f
+            x += g.text(sg.pct, x, baseY, size, 700, sg.color) + gap
+        }
+    }
+
     private fun drawBattery(g: Pen, w: Float, h: Float, snap: Snapshot, t: Theme, o: Opts) {
         g.card(w, h, o.opacity)
         val panels = visible(snap, hist = emptyList(), t = t, o = o)
@@ -798,10 +873,14 @@ object WidgetRenderer {
         val n = panels.size
         val pad = 12f
         val colW = (w - pad * 2) / n
+        // A battery needs room for its body, cap and the gap to its neighbour. Below
+        // that the bodies used to overlap and the percentages ran together.
+        if (colW < 46f) { drawDense(g, w, h, panels, t); return }
         val showName = h >= 74f
         val showReset = h >= 100f
         val bodyH = min(34f, h * .36f).coerceAtLeast(18f)
-        val bodyW = min(colW - 26f, bodyH * 2.3f).coerceAtLeast(36f)
+        // Clamped to the column, never merely coerced up past it.
+        val bodyW = min(colW - 12f, bodyH * 2.3f).coerceIn(28f, colW - 10f)
         val block = bodyH + (if (showName) 17f else 0f) + (if (showReset) 14f else 0f)
         val topY = (h - block) / 2f
 
@@ -818,7 +897,12 @@ object WidgetRenderer {
                 val remaining = (100 - b.pct).coerceIn(0, 100)
                 val fw = (bodyW - 8f) * remaining / 100f
                 if (fw > 1f) g.rrect(bx + 4f, topY + 4f, fw, bodyH - 8f, 3f, sc)
-                g.text("$remaining%", cx, topY + bodyH / 2f + 4.5f, 13f, 700, t.text, Paint.Align.CENTER)
+                // Only label the fill when the glyphs fit inside the body.
+                val lbl = "$remaining%"
+                val ls = if (g.measure(lbl, 13f, 700) <= bodyW - 8f) 13f else 10.5f
+                if (g.measure(lbl, ls, 700) <= bodyW - 5f) {
+                    g.text(lbl, cx, topY + bodyH / 2f + ls * .35f, ls, 700, t.text, Paint.Align.CENTER)
+                }
             } else {
                 g.text("--", cx, topY + bodyH / 2f + 4.5f, 12f, 700, t.faint, Paint.Align.CENTER)
             }
@@ -827,10 +911,14 @@ object WidgetRenderer {
                     if (p.state.configured) p.color else t.dim, Paint.Align.CENTER, .03f)
             }
             if (showReset) {
-                g.text(
-                    if (b != null) "resets " + left(b.resetsAt) else "tap to sign in",
-                    cx, topY + bodyH + 28f, 9.5f, 500, t.faint, Paint.Align.CENTER
-                )
+                // With a real count available, "1.2M tokens left" beats repeating the reset.
+                val tokens = if (o.tokens && b != null) remainingText(b) else null
+                val sub = when {
+                    b == null -> "tap to sign in"
+                    tokens != null && g.measure(tokens, 9.5f, 500) <= colW - 8f -> tokens
+                    else -> "resets " + left(b.resetsAt)
+                }
+                g.text(sub, cx, topY + bodyH + 28f, 9.5f, 500, t.faint, Paint.Align.CENTER)
             }
         }
     }
@@ -860,6 +948,9 @@ object WidgetRenderer {
         val n = panels.size
         val pad = 12f
         val colW = (w - pad * 2) / n
+        // "3h 39m" at a legible size needs roughly this much column; under it the
+        // durations from adjacent providers used to overprint each other.
+        if (colW < 58f) { drawDense(g, w, h, panels, t); return }
         val showName = h >= 66f
         val showSub = h >= 92f
         val big = min(colW * .22f, 27f).coerceAtLeast(14f)
@@ -884,7 +975,11 @@ object WidgetRenderer {
                 return@forEachIndexed
             }
             val urgent = b.resetsAt in 1 until now + 30 * 60_000L
-            g.text(left(b.resetsAt), cx, y + big * .8f, big, 700,
+            val dur = left(b.resetsAt)
+            // Step the figure down rather than let it spill into the next column.
+            var ds = big
+            while (ds > 10f && g.measure(dur, ds, 700, -.01f) > colW - 8f) ds -= .5f
+            g.text(dur, cx, y + big * .8f, ds, 700,
                 if (urgent) t.warn else t.text, Paint.Align.CENTER, -.01f)
             y += big + 5f
             if (showSub) {
@@ -931,7 +1026,13 @@ object WidgetRenderer {
             return total
         }
 
+        // Names are a luxury; when even the numbers alone will not fit, hand off to the
+        // font-fitting routine rather than drawing past both edges.
         val withNames = width(true) <= w - 24f
+        if (!withNames && width(false) > w - 14f) {
+            drawDense(g, w, h, panels, t)
+            return
+        }
         var x = (w - width(withNames)) / 2f
         segs.forEachIndexed { i, sg ->
             g.circle(x + 3.4f, y1 - 4f, 3.4f, if (sg.configured) sg.color else t.faint)
@@ -1090,16 +1191,101 @@ object WidgetRenderer {
         }
     }
 
-    /** A supporting line under the hero: how much is left, and how fast it is going. */
+    /**
+     * A supporting line under the hero. The left half says how much is left — as a real
+     * count when the provider reports one, otherwise as a percentage. The right half is
+     * the most informative thing that fits: how fast it is burning, else how the spend
+     * compares with the clock.
+     */
     private fun drawStats(
-        g: Pen, x: Float, baseY: Float, w: Float, b: Win, series: List<Pair<Long, Int>>, t: Theme,
+        g: Pen, x: Float, baseY: Float, w: Float, b: Win, series: List<Pair<Long, Int>>,
+        t: Theme, o: Opts,
     ) {
-        val leftW = g.text("${100 - b.pct}% left", x, baseY, 11f, 600, t.dim)
-        val burn = burnText(series) ?: return
-        // Only add the burn phrase when it clears the "N% left" text on a narrow block.
-        if (leftW + 12f + g.measure(burn.first, 11f, 500) <= w) {
-            g.text(burn.first, x + w, baseY, 11f, 500, if (burn.second) t.warn else t.faint, Paint.Align.RIGHT)
+        val tokens = if (o.tokens) remainingText(b) else null
+        val leftLabel = tokens ?: "${100 - b.pct}% left"
+        val leftW = g.text(leftLabel, x, baseY, 11f, 600, t.dim)
+
+        // Burn (how fast) and pace (whether that speed is sustainable) answer different
+        // questions, so both are offered and the widest combination that fits is used.
+        // Picking one over the other would have made pace nearly unreachable, since burn
+        // is available as soon as an hour of history exists.
+        val burn = burnText(series)
+        val pace = if (o.pace) paceText(b) else null
+        val both = if (burn != null && pace != null) {
+            (burn.first + " · " + pace.first) to (burn.second || pace.second)
+        } else null
+        val room = w - leftW - 12f
+        val right = listOfNotNull(both, burn, pace)
+            .firstOrNull { g.measure(it.first, 11f, 500) <= room } ?: return
+        g.text(right.first, x + w, baseY, 11f, 500, if (right.second) t.warn else t.faint, Paint.Align.RIGHT)
+    }
+
+    /**
+     * Spend measured against the clock: 1.0 means the window is being consumed exactly
+     * as fast as it refills, 2.0 means twice that. Needs a window whose length is known
+     * and enough of it elapsed to be meaningful — early in a window the ratio is wild
+     * (1% into a 5-hour window, any usage looks like 50x), so it stays silent until 8%.
+     */
+    internal fun pace(w: Win, now: Long = System.currentTimeMillis()): Float? {
+        val len = windowLengthMs(w.label) ?: return null
+        if (w.resetsAt <= 0) return null
+        val remain = (w.resetsAt - now).coerceIn(0L, len)
+        val elapsed = 1f - remain.toFloat() / len
+        if (elapsed < .08f) return null
+        return (w.pct / 100f) / elapsed
+    }
+
+    /** Pace as a phrase, plus whether it is steep enough to colour. */
+    internal fun paceText(w: Win, now: Long = System.currentTimeMillis()): Pair<String, Boolean>? {
+        val r = pace(w, now) ?: return null
+        return when {
+            r >= 1.15f -> String.format(Locale.US, "%.1fx pace", r) to (r >= 1.5f)
+            r <= .85f -> "under pace" to false
+            else -> "on pace" to false
         }
+    }
+
+    /**
+     * A count still available, when the provider actually reports one. Claude and Codex
+     * publish percentages only, so this is null for them by construction rather than
+     * back-computed from a guessed allowance.
+     */
+    internal fun remainingText(w: Win): String? {
+        val n = w.remaining ?: return null
+        val unit = w.unit?.lowercase()
+        val noun = when {
+            unit == null -> ""
+            unit.contains("token") -> " tokens"
+            unit.contains("request") -> " requests"
+            unit.contains("credit") -> " credits"
+            else -> " " + unit.replace('_', ' ')
+        }
+        return compactCount(n) + noun + " left"
+    }
+
+    /** 950 -> "950", 12_400 -> "12.4K", 3_200_000 -> "3.2M". */
+    internal fun compactCount(n: Long): String = when {
+        n < 1_000 -> n.toString()
+        n < 1_000_000 -> trimZero(n / 1_000.0) + "K"
+        n < 1_000_000_000 -> trimZero(n / 1_000_000.0) + "M"
+        else -> trimZero(n / 1_000_000_000.0) + "B"
+    }
+
+    private fun trimZero(v: Double): String {
+        val s = String.format(Locale.US, "%.1f", v)
+        return if (s.endsWith(".0")) s.dropLast(2) else s
+    }
+
+    /**
+     * Reset as a wall clock, with a weekday once it is far enough out that "22:19"
+     * alone would be ambiguous — a 7-day window resetting on Friday reads better as
+     * "Fri 09:00" than as a bare time three days away.
+     */
+    internal fun resetClock(ms: Long, now: Long = System.currentTimeMillis()): String {
+        if (ms <= 0) return "--:--"
+        val far = ms - now >= 20 * 3600_000L
+        val fmt = if (far) "EEE HH:mm" else "HH:mm"
+        return SimpleDateFormat(fmt, Locale.getDefault()).format(Date(ms))
     }
 
     private fun clock(ms: Long): String =

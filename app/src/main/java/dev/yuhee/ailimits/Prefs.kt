@@ -120,6 +120,18 @@ object Prefs {
     fun setGeminiProject(ctx: Context, project: String, tier: String?) =
         p(ctx).edit().putString("gm_project", project).putString("gm_tier", tier).apply()
 
+    /**
+     * Field names seen in the last usage response of each provider — names only, never
+     * values, so it is safe to paste into a bug report. This is how we find out whether
+     * Claude or Codex ever start publishing token counts: today they expose percentages
+     * only, and the alternative to looking would be guessing.
+     */
+    fun responseKeys(ctx: Context, provider: String): String? =
+        p(ctx).getString("keys_$provider", null)
+
+    fun setResponseKeys(ctx: Context, provider: String, keys: String) =
+        p(ctx).edit().putString("keys_$provider", keys.take(600)).apply()
+
     // --- Last usage snapshot (JSON) ---
     fun snapshot(ctx: Context): String? = p(ctx).getString("snapshot", null)
     fun setSnapshot(ctx: Context, json: String) = p(ctx).edit().putString("snapshot", json).apply()

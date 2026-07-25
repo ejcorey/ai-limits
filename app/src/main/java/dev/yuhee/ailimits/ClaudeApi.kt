@@ -105,6 +105,7 @@ object ClaudeApi {
             }
         }
         if (r.code !in 200..299) throw RuntimeException("Claude usage HTTP ${r.code}")
+        Schema.record(ctx, "claude", r.body)
         return parseUsage(r.body)
     }
 

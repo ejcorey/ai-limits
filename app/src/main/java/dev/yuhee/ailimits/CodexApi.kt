@@ -171,6 +171,7 @@ object CodexApi {
             r = usageRequest(t)
         }
         if (r.code !in 200..299) throw RuntimeException("Codex usage HTTP ${r.code}")
+        Schema.record(ctx, "codex", r.body)
         return parseUsage(r.body)
     }
 

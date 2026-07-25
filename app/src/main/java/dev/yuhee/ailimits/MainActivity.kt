@@ -199,6 +199,12 @@ class MainActivity : AppCompatActivity() {
         switch(R.id.swSparkline, Settings.showSparkline(this)) { on ->
             Settings.setShowSparkline(this, on); applyWidgetChange()
         }
+        switch(R.id.swTokens, Settings.showTokens(this)) { on ->
+            Settings.setShowTokens(this, on); applyWidgetChange()
+        }
+        switch(R.id.swPace, Settings.showPace(this)) { on ->
+            Settings.setShowPace(this, on); applyWidgetChange()
+        }
     }
 
     /**
@@ -342,10 +348,18 @@ class MainActivity : AppCompatActivity() {
             sb.append('\n')
             st.windows.forEach { w ->
                 sb.append("  ").append(w.label).append(' ').append(w.pct).append("% resets ")
-                    .append(if (w.resetsAt > 0) Date(w.resetsAt).toString() else "?").append('\n')
+                    .append(if (w.resetsAt > 0) Date(w.resetsAt).toString() else "?")
+                w.remaining?.let { sb.append(" remaining=").append(it).append(' ').append(w.unit ?: "?") }
+                sb.append('\n')
             }
         }
         sb.append("history points: ").append(UsageRepo.history(this).size).append('\n')
+        // Field names only — no values — so this is safe to paste anywhere. It is how we
+        // learn whether a provider has started publishing counts we could be showing.
+        sb.append("response fields seen (names only):\n")
+        listOf("claude", "codex", "gemini").forEach { k ->
+            Prefs.responseKeys(this, k)?.let { sb.append("  ").append(k).append(": ").append(it).append('\n') }
+        }
         (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager)
             .setPrimaryClip(ClipData.newPlainText("Auspex diagnostics", sb.toString()))
         toast("Diagnostics copied — no tokens included")

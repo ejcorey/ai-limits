@@ -50,8 +50,8 @@ class WidgetRenderTest {
         claudeErr: String? = null,
         codexConfigured: Boolean = true,
         geminiWins: List<Win> = listOf(
-            Win("Pro", 37, now + 9 * hour),
-            Win("Flash", 12, now + 9 * hour),
+            Win("Pro", 37, now + 9 * hour, remaining = 1_240_000, unit = "TOKENS"),
+            Win("Flash", 12, now + 9 * hour, remaining = 8_900_000, unit = "TOKENS"),
         ),
     ) = Snapshot(
         ProviderState(true, claudeWins, claudeErr),
@@ -148,10 +148,11 @@ class WidgetRenderTest {
             180f to 60f,
             250f to 45f,    // very wide and very short
             420f to 70f,
-            480f to 380f,   // largest the manifest now allows
-            480f to 70f,    // full-width single strip
+            640f to 480f,   // largest the manifest now allows
+            640f to 70f,    // full-width single strip
             110f to 110f,   // one One-UI cell square
-            200f to 380f,   // narrow and very tall
+            90f to 36f,     // the very smallest any style permits
+            200f to 480f,   // narrow and very tall
         )
         for (style in WidgetRenderer.Style.entries) {
             for ((w, h) in sizes) {
@@ -166,13 +167,41 @@ class WidgetRenderTest {
         dark()
         var n = 0
         var h = 40f
-        while (h <= 380f) {
+        while (h <= 480f) {
             WidgetRenderer.render(ctx, WidgetRenderer.Style.DETAIL, 264f, h, snap(), history)
             WidgetRenderer.render(ctx, WidgetRenderer.Style.DETAIL, 150f, h, snap(), history)
             n++
             h += 4f
         }
         assertTrue("expected a sweep", n > 60)
+    }
+
+    /** The widened envelope: every style at the new ceiling and floor, all providers on. */
+    @Test
+    fun enlargedEnvelope() {
+        dark()
+        val o = WidgetRenderer.Opts(showGemini = true)
+        for (style in WidgetRenderer.Style.entries) {
+            val n = style.name.lowercase()
+            shoot("big-$n-640x480", style, 640f, 480f, o = o)
+            shoot("big-$n-640x120", style, 640f, 120f, o = o)
+            shoot("big-$n-96x44", style, 96f, 44f, o = o)
+        }
+    }
+
+    /** Gemini reports real token counts; they must reach the widget, and be droppable. */
+    @Test
+    fun tokenCounts() {
+        dark()
+        val onlyGemini = WidgetRenderer.Opts(showClaude = false, showCodex = false, showGemini = true)
+        shoot("tokens-solo-264x200", WidgetRenderer.Style.DETAIL, 264f, 200f, o = onlyGemini)
+        shoot("tokens-trio-264x232", WidgetRenderer.Style.DETAIL, 264f, 232f,
+            o = WidgetRenderer.Opts(showGemini = true))
+        shoot("tokens-battery-264x110", WidgetRenderer.Style.BATTERY, 264f, 110f, o = onlyGemini)
+        shoot("tokens-off-264x200", WidgetRenderer.Style.DETAIL, 264f, 200f,
+            o = onlyGemini.copy(tokens = false))
+        shoot("pace-off-264x200", WidgetRenderer.Style.DETAIL, 264f, 200f,
+            o = onlyGemini.copy(pace = false))
     }
 
     @Test

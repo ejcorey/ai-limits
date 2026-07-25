@@ -4,8 +4,22 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** One rate-limit window: label ("5h", "7d", "Opus", "Pro"...), percent used, reset time (epoch ms, 0 = unknown). */
-data class Win(val label: String, val pct: Int, val resetsAt: Long)
+/**
+ * One rate-limit window: label ("5h", "7d", "Opus", "Pro"...), percent used, reset
+ * time (epoch ms, 0 = unknown).
+ *
+ * [remaining] is an absolute count still available — only ever set when the provider
+ * actually reports one (today: Gemini's `remainingAmount`). It is deliberately null
+ * for Claude and Codex, which publish percentages only; deriving a count from a
+ * percentage would require inventing the denominator.
+ */
+data class Win(
+    val label: String,
+    val pct: Int,
+    val resetsAt: Long,
+    val remaining: Long? = null,
+    val unit: String? = null,
+)
 
 data class ProviderState(
     val configured: Boolean,
@@ -67,7 +81,17 @@ object UsageRepo {
             val o = arr.optJSONObject(i) ?: continue
             val label = o.optString("l", "")
             if (label.isEmpty()) continue
-            wins.add(Win(label, o.optInt("p", 0), o.optLong("r", 0)))
+            wins.add(
+                Win(
+                    label,
+                    o.optInt("p", 0),
+                    o.optLong("r", 0),
+                    // -1 is the on-disk marker for "not reported", so a real 0 remaining
+                    // (genuinely exhausted) stays distinguishable from absent.
+                    o.optLong("n", -1L).takeIf { it >= 0 },
+                    o.optString("u", "").ifEmpty { null },
+                )
+            )
         }
         return ProviderState(
             configured,
@@ -79,7 +103,10 @@ object UsageRepo {
     private fun providerJson(s: ProviderState): JSONObject {
         val arr = JSONArray()
         s.windows.forEach { w ->
-            arr.put(JSONObject().put("l", w.label).put("p", w.pct).put("r", w.resetsAt))
+            arr.put(
+                JSONObject().put("l", w.label).put("p", w.pct).put("r", w.resetsAt)
+                    .put("n", w.remaining ?: -1L).put("u", w.unit ?: "")
+            )
         }
         return JSONObject().put("w", arr).put("e", s.error ?: "").put("plan", s.plan ?: "")
     }

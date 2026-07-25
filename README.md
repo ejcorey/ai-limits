@@ -39,13 +39,15 @@ Seven styles, all drawn on a canvas so they scale properly instead of clipping:
 All of these change the widgets immediately, with a live preview in the app:
 
 - **Which providers to show** — Claude, Codex, and optionally **Gemini**. With one provider on, it gets a roomier layout (a full row per window); with three, the widget lays out three panels. Gemini stays off widgets until you sign in.
+- **Exact counts over percentages**, where a provider publishes one. Gemini reports tokens remaining, so widgets can say "1.2M tokens left" instead of "63% left"; Claude and Codex publish percentages only, and nothing is invented for them.
+- **Pace against the clock** — "1.8x pace" means the window is being spent nearly twice as fast as it refills. Shown only for windows whose length is known, and only once enough of the window has elapsed for the ratio to mean anything.
 - **Which windows to show, per provider** — uncheck any limit window (say, hide Claude's 5-hour and keep only the weekly) and the widgets' headline becomes the fullest of what's left. New windows from the API appear automatically. When hiding windows changes which one leads, trend-derived extras (burn rate, projection, sparkline) go quiet rather than describing the wrong window.
 - **Theme** — follow the system, or force dark/light regardless of it.
 - **Background opacity**, 40–100%, for translucency over the wallpaper.
 - **Burn-projection warning** and **trend sparklines** can each be turned off.
 - **Alerts** — get notified when a window passes 75/80/90/95%. Fires once per window per reset period, not on every refresh.
 - **Auto-refresh** every 15 min / 30 min / 1 h / 2 h.
-- **Copy diagnostics** puts the current state on the clipboard. No tokens are included.
+- **Copy diagnostics** puts the current state on the clipboard, including the *field names* each provider last returned (names only, never values). That is how a new token count would be spotted rather than assumed absent. No credentials are included.
 
 ## What it shows
 

@@ -226,6 +226,7 @@ object GeminiApi {
             )
         }
         if (r.code !in 200..299) throw RuntimeException("Gemini usage failed (HTTP ${r.code}): ${r.body.take(160)}")
+        Schema.record(ctx, "gemini", r.body)
         return parseQuota(r.body) to prettyTier(tier)
     }
 
@@ -244,8 +245,15 @@ object GeminiApi {
             val pct = ((1 - frac) * 100).roundToInt().coerceIn(0, 100)
             val reset = parseIso(o.optString("resetTime", ""))
             val label = modelLabel(o.optString("modelId", ""))
+            // remainingAmount is a numeric string (Gemini CLI parseInt's it the same way).
+            // An absent or non-numeric value simply means no count to show.
+            val remaining = o.optString("remainingAmount", "").trim()
+                .takeIf { it.isNotEmpty() }?.toLongOrNull()?.takeIf { it >= 0 }
+            val unit = o.optString("tokenType", "").trim().ifEmpty { null }
             val prev = byLabel[label]
-            if (prev == null || pct > prev.pct) byLabel[label] = Win(label, pct, reset)
+            if (prev == null || pct > prev.pct) {
+                byLabel[label] = Win(label, pct, reset, remaining, unit)
+            }
         }
         // A recognised-but-empty answer must fail so the previous snapshot survives —
         // same rule as the other providers.

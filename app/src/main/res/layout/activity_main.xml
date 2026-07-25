@@ -424,6 +424,34 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="Show trend sparklines on tall widgets" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/swTokens"
+                style="@style/Row"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Prefer exact counts over percentages" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Only where the provider publishes one. Gemini reports tokens remaining; Claude and Codex publish percentages only, so nothing is invented for them."
+                android:textColor="@color/text2"
+                android:textSize="11sp" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/swPace"
+                style="@style/Row"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Compare spend against the clock" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="“1.8× pace” means you are burning the window nearly twice as fast as it refills."
+                android:textColor="@color/text2"
+                android:textSize="11sp" />
         </LinearLayout>
 
         <!-- ============ alerts ============ -->
