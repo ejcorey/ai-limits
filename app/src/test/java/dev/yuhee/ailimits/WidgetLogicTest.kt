@@ -2,6 +2,7 @@ package dev.yuhee.ailimits
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -10,6 +11,61 @@ import org.junit.Test
  * and how long until it resets. No Android needed.
  */
 class WidgetLogicTest {
+
+    // --- what a null projection is allowed to mean ------------------------
+    // Runway used to read "all within budget" whenever no lane projected, but
+    // projection() also returns null for too few samples, too short a span, and a burn
+    // below its noise floor. canProject separates "measured and safe" from "cannot say".
+
+    @Test
+    fun `canProject is false without enough recent samples`() {
+        val now = System.currentTimeMillis()
+        assertFalse("no history at all", WidgetRenderer.canProject(emptyList(), now))
+        assertFalse(
+            "two samples is not enough to fit a line",
+            WidgetRenderer.canProject(listOf(now - 60 * 60_000L to 10, now to 40), now)
+        )
+        assertFalse(
+            "three samples inside 15 minutes span too little time",
+            WidgetRenderer.canProject(
+                listOf(now - 14 * 60_000L to 10, now - 7 * 60_000L to 20, now to 30), now
+            )
+        )
+        // Samples older than the 110-minute window do not count toward the total.
+        assertFalse(
+            "old samples must not prop up a thin recent window",
+            WidgetRenderer.canProject(
+                listOf(now - 5 * 3600_000L to 1, now - 4 * 3600_000L to 2, now to 30), now
+            )
+        )
+    }
+
+    @Test
+    fun `canProject is true once there is a real recent span`() {
+        val now = System.currentTimeMillis()
+        assertTrue(
+            WidgetRenderer.canProject(
+                listOf(now - 90 * 60_000L to 10, now - 45 * 60_000L to 30, now to 50), now
+            )
+        )
+    }
+
+    /**
+     * The case that made the old headline lie: a window pinned at 100% has a burn rate of
+     * zero, so it projects nothing — yet it is the state the user most needs told about.
+     */
+    @Test
+    fun `a maxed-out window projects nothing even though it is measurable`() {
+        val now = System.currentTimeMillis()
+        val flatAtFull = listOf(
+            now - 90 * 60_000L to 100, now - 45 * 60_000L to 100, now to 100
+        )
+        assertTrue("the samples themselves are fine", WidgetRenderer.canProject(flatAtFull, now))
+        assertNull(
+            "a flat line has no slope to project along",
+            WidgetRenderer.projection(Win("5h", 100, now + 3 * 3600_000L), flatAtFull)
+        )
+    }
 
     @Test
     fun `window labels are spelled out`() {

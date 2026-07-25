@@ -126,6 +126,74 @@ class WidgetConfigTest {
         assertEquals(15, Prefs.refreshMinutes(ctx))
     }
 
+    // --- Runway's headline may not manufacture a verdict -------------------
+
+    private val hour = 3_600_000L
+    private val now = System.currentTimeMillis()
+
+    private fun lane(name: String, pct: Int?, dry: Long? = null, measurable: Boolean = true) =
+        WidgetRenderer.Lane(
+            name, 0, ProviderState(true, emptyList(), null),
+            pct?.let { Win("5h", it, now + 3 * hour, lengthMs = 5 * hour) }, dry, measurable,
+        )
+
+    @Test
+    fun `no burn data yet is not a claim that you are within budget`() {
+        val (head, alarm) = WidgetRenderer.runwayHeadline(
+            listOf(lane("Claude", 40, measurable = false), lane("Codex", 20, measurable = false)), now
+        )
+        assertEquals("measuring burn…", head)
+        assertFalse(alarm)
+    }
+
+    /**
+     * The case the old headline got exactly backwards: a window pinned at 100% has no
+     * slope, so nothing projects, so it used to report "all within budget" to a user who
+     * was at that moment blocked.
+     */
+    @Test
+    fun `an exhausted window is reported, not called within budget`() {
+        val (head, alarm) = WidgetRenderer.runwayHeadline(
+            listOf(lane("Claude", 100), lane("Codex", 20)), now
+        )
+        assertEquals("Claude is out", head)
+        assertTrue(alarm)
+    }
+
+    @Test
+    fun `a nearly full window is named with its number`() {
+        val (head, alarm) = WidgetRenderer.runwayHeadline(listOf(lane("Codex", 94)), now)
+        assertEquals("Codex at 94%", head)
+        assertTrue(alarm)
+    }
+
+    @Test
+    fun `within budget is only claimed once something was actually measured`() {
+        val (head, alarm) = WidgetRenderer.runwayHeadline(
+            listOf(lane("Claude", 40), lane("Codex", 20)), now
+        )
+        assertEquals("all within budget", head)
+        assertFalse(alarm)
+    }
+
+    @Test
+    fun `a real projection outranks everything and says how early`() {
+        val (head, alarm) = WidgetRenderer.runwayHeadline(
+            listOf(lane("Claude", 60, dry = now + 2 * hour), lane("Codex", 20)), now
+        )
+        assertEquals("Claude runs dry 1h early", head)
+        assertTrue(alarm)
+    }
+
+    @Test
+    fun `a signed out set of lanes claims nothing at all`() {
+        val (head, alarm) = WidgetRenderer.runwayHeadline(
+            listOf(lane("Claude", null, measurable = false)), now
+        )
+        assertEquals("runway", head)
+        assertFalse(alarm)
+    }
+
     @Test
     fun `every style has a receiver whose default style is itself`() {
         // A style reachable only through an override would never appear in the picker.

@@ -1283,17 +1283,21 @@ object WidgetRenderer {
         val tight = free < 12
         val soonest = ranked.mapNotNull { it.second.resetsAt.takeIf { r -> r > now } }.minOrNull()
 
-        val hero: String
+        var hero: String
         val heroColor: Int
-        val caption: String
+        var caption: String
         val sub: String?
+        // Whether the hero is a percentage — and therefore needs saying WHICH percentage.
+        val heroIsPercent: Boolean
         if (tight) {
+            heroIsPercent = soonest == null
             hero = if (soonest != null) brief(soonest - now) else "$free%"
             heroColor = if (free < 5) t.red else t.warn
             caption = "all tight"
             sub = if (soonest != null) "until ${ranked.first { it.second.resetsAt == soonest }.first.name} resets"
                   else "${best.name} has the most left"
         } else {
+            heroIsPercent = true
             hero = "$free%"
             heroColor = t.status(bestWin.pct, best.color)
             caption = best.name
@@ -1302,6 +1306,20 @@ object WidgetRenderer {
 
         val showCaption = h >= 62f
         val showSub = h >= 92f && sub != null
+
+        // This number is what is LEFT; every other style in the app reports what is USED.
+        // An unqualified "59%" next to a Ticker reading "41%" says the opposite of the
+        // truth, so the word "free" is attached to the lowest line actually being drawn —
+        // exactly once, never twice.
+        if (heroIsPercent && !showSub) {
+            val qualified = "$caption · free"
+            // Measured before it is chosen: fitText draws nothing at all when a string
+            // cannot be made to fit, which would drop the qualifier silently and put the
+            // ambiguity straight back.
+            if (showCaption && g.measure(qualified, 11f, 700, .04f) <= avail) caption = qualified
+            else hero = "$free% free"
+        }
+
         // The hero is sized to the space actually left after the lines that will be drawn,
         // then measured down until it fits the width — never drawn on an assumed size.
         val reserved = (if (showCaption) 17f else 0f) + (if (showSub) 15f else 0f)
@@ -1419,11 +1437,18 @@ object WidgetRenderer {
             if (labelH > 0f) {
                 val txt = brief(e.at - now)
                 val tw = g.measure(txt, 9f, 600)
+                // A centred label on the furthest event always overhangs the right edge —
+                // its stem sits 3dp in, so centring demanded a label no wider than 6dp and
+                // the one event that sets the axis scale was the one that could never be
+                // labelled. It is right-aligned to the edge instead of dropped.
+                val overhangs = x + tw / 2f > plotX + plotW
+                val leftEdge = if (overhangs) plotX + plotW - tw else x - tw / 2f
                 // Clustered resets would overprint each other; a label is skipped rather
                 // than drawn on top of its neighbour.
-                if (x - tw / 2f > lastRight + 4f && x + tw / 2f <= plotX + plotW) {
-                    g.text(txt, x, baseY + 11f, 9f, 600, t.faint, Paint.Align.CENTER)
-                    lastRight = x + tw / 2f
+                if (leftEdge > lastRight + 4f && leftEdge >= plotX) {
+                    if (overhangs) g.text(txt, plotX + plotW, baseY + 11f, 9f, 600, t.faint, Paint.Align.RIGHT)
+                    else g.text(txt, x, baseY + 11f, 9f, 600, t.faint, Paint.Align.CENTER)
+                    lastRight = leftEdge + tw
                 }
             }
         }
@@ -1434,6 +1459,44 @@ object WidgetRenderer {
     // the bar runs to where the current burn projects exhaustion, the notch is the reset.
     // Bar short of the notch means you make it; past it means you stall first.
 
+    internal class Lane(
+        val name: String,
+        val color: Int,
+        val state: ProviderState,
+        val win: Win?,
+        /** When the current burn projects this window hitting 100%, or null. */
+        val dry: Long?,
+        /** Whether a projection could have been computed at all — see [canProject]. */
+        val measurable: Boolean,
+    )
+
+    /**
+     * Runway's headline, and whether it is an alarm. Split out of the drawing so the
+     * decision can be tested: it used to print "all within budget" whenever no lane
+     * projected, which reads as a safety verdict but was really the absence of one —
+     * loudest exactly when a window sat pinned at 100%, since a flat line has no slope
+     * and therefore no projection.
+     */
+    internal fun runwayHeadline(lanes: List<Lane>, now: Long): Pair<String, Boolean> {
+        val worst = lanes.filter { it.dry != null }.minByOrNull { it.dry!! }
+        val full = lanes.filter { (it.win?.pct ?: 0) >= 90 }.maxByOrNull { it.win!!.pct }
+        val head = when {
+            worst?.win != null && worst.win.resetsAt > now ->
+                "${worst.name} runs dry ${brief(worst.win.resetsAt - worst.dry!!)} early"
+            worst != null -> "${worst.name} runs dry in ${brief(worst.dry!! - now)}"
+            full?.win != null && full.win.pct >= 99 -> "${full.name} is out"
+            full?.win != null -> "${full.name} at ${full.win.pct}%"
+            lanes.none { it.win != null } -> "runway"
+            // "No projection" is not "you are safe": projection() also returns null for too
+            // few samples, too short a span, and a burn below its noise floor. Asserting
+            // budget safety from any of those states claims a conclusion the data cannot
+            // support — the same thing the empty track deliberately refuses to do.
+            lanes.none { it.measurable } -> "measuring burn…"
+            else -> "all within budget"
+        }
+        return head to (worst != null || full != null)
+    }
+
     private fun drawRunway(
         g: Pen, w: Float, h: Float, snap: Snapshot, hist: List<HistoryPoint>, t: Theme, o: Opts,
     ) {
@@ -1443,10 +1506,9 @@ object WidgetRenderer {
         val now = System.currentTimeMillis()
         val pad = 12f
 
-        class Lane(val name: String, val color: Int, val state: ProviderState, val win: Win?, val dry: Long?)
         val lanes = panels.map { p ->
             val b = binding(p.state)
-            Lane(p.name, p.color, p.state, b, b?.let { projection(it, p.series) })
+            Lane(p.name, p.color, p.state, b, b?.let { projection(it, p.series) }, canProject(p.series, now))
         }
 
         // A shared axis is the whole point — the lanes are only comparable against the
@@ -1467,16 +1529,8 @@ object WidgetRenderer {
         if (laneH < 18f || w < 130f) { drawDense(g, w, h, panels, t); return }
 
         if (showHead) {
-            // The headline is the finding, not a title: the provider that stalls soonest.
-            val worst = lanes.filter { it.dry != null }.minByOrNull { it.dry!! }
-            val head = when {
-                worst?.win != null && worst.win.resetsAt > now ->
-                    "${worst.name} runs dry ${brief(worst.win.resetsAt - worst.dry!!)} early"
-                worst != null -> "${worst.name} runs dry in ${brief(worst.dry!! - now)}"
-                lanes.any { it.win != null } -> "all within budget"
-                else -> "runway"
-            }
-            g.fitText(head, pad, pad + 9f, 10.5f, 700, if (worst != null) t.warn else t.faint,
+            val (head, alarm) = runwayHeadline(lanes, now)
+            g.fitText(head, pad, pad + 9f, 10.5f, 700, if (alarm) t.warn else t.faint,
                 w - pad * 2, tracking = .02f)
         }
         var y = pad + headH + (room - laneH * n).coerceAtLeast(0f) / 2f
@@ -1684,14 +1738,27 @@ object WidgetRenderer {
      * Linear burn over recent history projected forward to 100%. Null unless the
      * window would realistically cap before it resets.
      */
+    /**
+     * Whether there is enough recent history to attempt a projection at all — the sample
+     * preconditions of [projection], and nothing else.
+     *
+     * Kept separate because a null projection has four different meanings and only one of
+     * them is "you reach the reset before running out". Callers that want to say something
+     * reassuring must first establish that they could have said the opposite.
+     */
+    internal fun canProject(series: List<Pair<Long, Int>>, now: Long = System.currentTimeMillis()): Boolean {
+        val pts = series.filter { it.first >= now - 110 * 60_000L && it.second >= 0 }
+        if (pts.size < 3) return false
+        return (pts.last().first - pts.first().first) / 3600_000f > .25f
+    }
+
     internal fun projection(b: Win, series: List<Pair<Long, Int>>): Long? {
         val now = System.currentTimeMillis()
+        if (!canProject(series, now)) return null
         val pts = series.filter { it.first >= now - 110 * 60_000L && it.second >= 0 }
-        if (pts.size < 3) return null
         val first = pts.first()
         val last = pts.last()
         val hours = (last.first - first.first) / 3600_000f
-        if (hours <= .25f) return null
         val rate = (last.second - first.second) / hours
         if (rate <= 2.5f) return null
         val at = now + ((100 - last.second) / rate * 3600_000f).toLong()
