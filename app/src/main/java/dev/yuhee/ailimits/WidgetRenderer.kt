@@ -126,6 +126,9 @@ object WidgetRenderer {
         BatteryWidgetProvider::class.java,
         CountdownWidgetProvider::class.java,
         TickerWidgetProvider::class.java,
+        PickWidgetProvider::class.java,
+        HorizonWidgetProvider::class.java,
+        RunwayWidgetProvider::class.java,
     )
 
     private fun ids(ctx: Context, cls: Class<*>): IntArray =
@@ -144,13 +147,17 @@ object WidgetRenderer {
         val hist = UsageRepo.history(ctx)
         // Colours are resolved against the chosen theme, not necessarily the system one.
         val theme = Theme(Settings.themedContext(ctx))
-        val opts = optsFrom(ctx)
-        // Sizes differ per instance, so each widget is rendered on its own.
+        val global = optsFrom(ctx)
+        val live = mutableSetOf<Int>()
+        // Sizes and now settings differ per instance, so each widget is rendered on its own.
         providers.forEach { cls ->
             ids(ctx, cls).forEach { id ->
+                live.add(id)
                 if (onlyId != null && id != onlyId) return@forEach
                 try {
-                    mgr.updateAppWidget(id, build(ctx, mgr, id, cls, snap, hist, theme, opts, refreshing))
+                    val cfg = WidgetConfigStore.load(ctx, id)
+                    val opts = optsFor(cfg, global)
+                    mgr.updateAppWidget(id, build(ctx, mgr, id, cls, cfg, snap, hist, theme, opts, refreshing))
                 } catch (e: Throwable) {
                     // One bad widget must not stop the others, but a silent failure
                     // leaves a blank widget with no way to find out why.
@@ -158,13 +165,45 @@ object WidgetRenderer {
                 }
             }
         }
+        // Only a full pass has seen every live id; reaping from a single-widget redraw
+        // would delete every other widget's configuration.
+        if (onlyId == null) WidgetConfigStore.reap(ctx, live)
     }
+
+    /**
+     * Three-tier read: this widget's own choice, else the app-wide setting, else the code
+     * default. A widget with no record of its own returns [global] *identically* — that is
+     * what keeps every widget placed before this feature existed rendering as it did.
+     */
+    internal fun optsFor(cfg: WidgetConfig?, global: Opts): Opts {
+        if (cfg == null) return global
+        val merged = global.copy(
+            showClaude = cfg.showClaude ?: global.showClaude,
+            showCodex = cfg.showCodex ?: global.showCodex,
+            showGemini = cfg.showGemini ?: global.showGemini,
+            opacity = cfg.opacity ?: global.opacity,
+            projection = cfg.projection ?: global.projection,
+            sparkline = cfg.sparkline ?: global.sparkline,
+            tokens = cfg.tokens ?: global.tokens,
+            pace = cfg.pace ?: global.pace,
+            hiddenClaude = cfg.hiddenClaude ?: global.hiddenClaude,
+            hiddenCodex = cfg.hiddenCodex ?: global.hiddenCodex,
+            hiddenGemini = cfg.hiddenGemini ?: global.hiddenGemini,
+        )
+        // Settings.setShown enforces this globally; a per-instance record has to be held
+        // to the same rule, since a widget showing no providers at all just reads broken.
+        return if (merged.shown == 0) global else merged
+    }
+
+    internal fun optsFor(ctx: Context, id: Int): Opts =
+        optsFor(WidgetConfigStore.load(ctx, id), optsFrom(ctx))
 
     private fun build(
         ctx: Context,
         mgr: AppWidgetManager,
         id: Int,
         cls: Class<*>,
+        cfg: WidgetConfig?,
         snap: Snapshot,
         hist: List<HistoryPoint>,
         t: Theme,
@@ -177,16 +216,44 @@ object WidgetRenderer {
         val hDp = box.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0)
             .takeIf { it > 0 }?.toFloat() ?: 120f
 
-        val style = when (cls) {
-            BarsWidgetProvider::class.java -> Style.BARS
-            PercentWidgetProvider::class.java -> Style.RINGS
-            GraphWidgetProvider::class.java -> Style.GRAPH
-            BatteryWidgetProvider::class.java -> Style.BATTERY
-            CountdownWidgetProvider::class.java -> Style.COUNTDOWN
-            TickerWidgetProvider::class.java -> Style.TICKER
-            else -> Style.DETAIL
-        }
+        // The receiver decides the style only until the user overrides it for this instance.
+        val style = cfg?.style ?: defaultStyleFor(cls)
         return compose(ctx, style, wDp, hDp, snap, hist, t, o, refreshing)
+    }
+
+    /**
+     * The style a placed widget would draw with no override — i.e. the one implied by the
+     * receiver the user picked in the launcher. Resolved by simple name because that is
+     * all [AppWidgetProviderInfo] carries.
+     */
+    fun defaultStyleForWidget(ctx: Context, id: Int): Style {
+        val name = AppWidgetManager.getInstance(ctx).getAppWidgetInfo(id)?.provider?.className
+        val cls = providers.firstOrNull { it.name == name } ?: return Style.DETAIL
+        return defaultStyleFor(cls)
+    }
+
+    /** dp size the launcher currently gives a widget, with the same fallbacks [build] uses. */
+    fun sizeOf(ctx: Context, id: Int): Pair<Float, Float> {
+        val box = AppWidgetManager.getInstance(ctx).getAppWidgetOptions(id)
+        val w = box?.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0)?.takeIf { it > 0 }?.toFloat() ?: 250f
+        val h = box?.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0)?.takeIf { it > 0 }?.toFloat() ?: 120f
+        return w to h
+    }
+
+    /** Every placed widget of ours, newest provider order. */
+    fun allWidgetIds(ctx: Context): List<Int> = providers.flatMap { ids(ctx, it).toList() }
+
+    internal fun defaultStyleFor(cls: Class<*>): Style = when (cls) {
+        BarsWidgetProvider::class.java -> Style.BARS
+        PercentWidgetProvider::class.java -> Style.RINGS
+        GraphWidgetProvider::class.java -> Style.GRAPH
+        BatteryWidgetProvider::class.java -> Style.BATTERY
+        CountdownWidgetProvider::class.java -> Style.COUNTDOWN
+        TickerWidgetProvider::class.java -> Style.TICKER
+        PickWidgetProvider::class.java -> Style.PICK
+        HorizonWidgetProvider::class.java -> Style.HORIZON
+        RunwayWidgetProvider::class.java -> Style.RUNWAY
+        else -> Style.DETAIL
     }
 
     /**
@@ -216,7 +283,23 @@ object WidgetRenderer {
         return rv
     }
 
-    enum class Style { DETAIL, BARS, RINGS, GRAPH, BATTERY, COUNTDOWN, TICKER }
+    /**
+     * The human name travels with the constant. It used to live in a parallel list in
+     * MainActivity, which is exactly the kind of pairing that goes stale the moment a
+     * style is added — as it did.
+     */
+    enum class Style(val label: String) {
+        DETAIL("Detail"),
+        BARS("Slim bars"),
+        RINGS("Rings"),
+        GRAPH("History"),
+        BATTERY("Battery"),
+        COUNTDOWN("Countdown"),
+        TICKER("Ticker"),
+        PICK("Pick"),
+        HORIZON("Horizon"),
+        RUNWAY("Runway"),
+    }
 
     /**
      * Draws one widget at a given dp size. Separate from [build] so tests can render
@@ -253,6 +336,9 @@ object WidgetRenderer {
             Style.BATTERY -> drawBattery(pen, wDp, hDp, snap, t, o)
             Style.COUNTDOWN -> drawCountdown(pen, wDp, hDp, snap, t, o)
             Style.TICKER -> drawTicker(pen, wDp, hDp, snap, t, o)
+            Style.PICK -> drawPick(pen, wDp, hDp, snap, t, o)
+            Style.HORIZON -> drawHorizon(pen, wDp, hDp, snap, t, o)
+            Style.RUNWAY -> drawRunway(pen, wDp, hDp, snap, hist, t, o)
             Style.DETAIL -> footer = drawDetail(pen, wDp, hDp, snap, hist, t, o, refreshing)
         }
         return bmp to footer
@@ -1155,6 +1241,301 @@ object WidgetRenderer {
     }
 
     // --- 24h history ------------------------------------------------------
+
+    // --- pick -------------------------------------------------------------
+    // One verdict, no comparison. Every other style answers "how much is left";
+    // this answers "which one should I use right now", in the largest type that fits,
+    // and it needs no history — so it is the only style that is fully populated one
+    // fetch after signing in, and the only one that reads at a 1x1 size.
+
+    /** A duration for an axis or a headline: one unit, no minutes past an hour. */
+    internal fun brief(ms: Long): String {
+        if (ms <= 0) return "now"
+        val m = ms / 60_000L
+        return when {
+            m < 60 -> "${m}m"
+            m < 60 * 24 -> "${m / 60}h"
+            else -> "${m / (60 * 24)}d"
+        }
+    }
+
+    private fun drawPick(g: Pen, w: Float, h: Float, snap: Snapshot, t: Theme, o: Opts) {
+        g.card(w, h, o.opacity)
+        val panels = visible(snap, hist = emptyList(), t = t, o = o)
+        if (panels.isEmpty()) return
+        val pad = min(12f, w * .1f)
+        val avail = w - pad * 2
+        val now = System.currentTimeMillis()
+
+        // Only a signed-in provider that reported a window can be recommended.
+        val ranked = panels.mapNotNull { p -> binding(p.state)?.let { p to it } }
+            .sortedByDescending { 100 - it.second.pct }
+        if (ranked.isEmpty()) {
+            val msg = if (panels.any { it.state.configured }) "no data yet" else "tap to sign in"
+            g.fitText(msg, w / 2f, h / 2f + 4f, 13f, 600, t.faint, avail, Paint.Align.CENTER)
+            return
+        }
+
+        val (best, bestWin) = ranked.first()
+        val free = (100 - bestWin.pct).coerceIn(0, 100)
+        // Under this there is no useful recommendation left to make, so the widget stops
+        // pointing somewhere and starts saying how long the wait is.
+        val tight = free < 12
+        val soonest = ranked.mapNotNull { it.second.resetsAt.takeIf { r -> r > now } }.minOrNull()
+
+        val hero: String
+        val heroColor: Int
+        val caption: String
+        val sub: String?
+        if (tight) {
+            hero = if (soonest != null) brief(soonest - now) else "$free%"
+            heroColor = if (free < 5) t.red else t.warn
+            caption = "all tight"
+            sub = if (soonest != null) "until ${ranked.first { it.second.resetsAt == soonest }.first.name} resets"
+                  else "${best.name} has the most left"
+        } else {
+            hero = "$free%"
+            heroColor = t.status(bestWin.pct, best.color)
+            caption = best.name
+            sub = "free · " + shortWindow(bestWin.label)
+        }
+
+        val showCaption = h >= 62f
+        val showSub = h >= 92f && sub != null
+        // The hero is sized to the space actually left after the lines that will be drawn,
+        // then measured down until it fits the width — never drawn on an assumed size.
+        val reserved = (if (showCaption) 17f else 0f) + (if (showSub) 15f else 0f)
+        var heroSize = min((h - reserved - 14f) * .78f, avail * .46f).coerceIn(16f, 62f)
+        while (heroSize > 14f && g.measure(hero, heroSize, 700, -.02f) > avail) heroSize -= 1f
+
+        val block = (if (showCaption) 17f else 0f) + heroSize + (if (showSub) 15f else 0f)
+        var y = (h - block) / 2f
+
+        if (showCaption) {
+            val dotR = 3.4f
+            val capW = g.measure(caption, 11f, 700, .04f)
+            val cx = w / 2f + (if (tight) 0f else dotR + 5f) / 2f
+            if (!tight && capW + dotR * 2 + 10f <= avail) {
+                g.circle(cx - capW / 2f - 8f, y + 7f, dotR, dotColor(best.state, best.color, t))
+            }
+            g.fitText(caption, cx, y + 11f, 11f, 700,
+                if (tight) t.dim else nameColor(best.state, best.color, t),
+                avail, Paint.Align.CENTER, .04f)
+            y += 17f
+        }
+        g.text(hero, w / 2f, y + heroSize * .8f, heroSize, 700, heroColor, Paint.Align.CENTER, -.02f)
+        y += heroSize
+        if (showSub) g.fitText(sub!!, w / 2f, y + 11f, 10.5f, 500, t.faint, avail, Paint.Align.CENTER)
+    }
+
+    // --- horizon ----------------------------------------------------------
+    // Every upcoming reset of every window on one forward time axis. This is the only
+    // style that shows the windows that are NOT binding — Claude's 7d/Opus/Sonnet, a
+    // Codex secondary, Gemini's per-model buckets — which the rest of the app discards.
+
+    private fun drawHorizon(g: Pen, w: Float, h: Float, snap: Snapshot, t: Theme, o: Opts) {
+        g.card(w, h, o.opacity)
+        val panels = visible(snap, hist = emptyList(), t = t, o = o)
+        if (panels.isEmpty()) return
+        val now = System.currentTimeMillis()
+        val pad = 12f
+
+        class Ev(val at: Long, val pct: Int, val label: String, val name: String, val color: Int, val state: ProviderState)
+        // resetsAt is 0 when the provider didn't report one or it wouldn't parse; such a
+        // window has no place on a time axis, so it is dropped rather than pinned to now.
+        val all = panels.flatMap { p ->
+            p.state.windows.filter { it.resetsAt > now }
+                .map { Ev(it.resetsAt, it.pct, it.label, p.name, p.color, p.state) }
+        }
+        // A Gemini account reports one window per model, which would crowd the axis to
+        // uselessness; the fullest windows are the ones worth waiting for.
+        val events = all.sortedByDescending { it.pct }.take(8).sortedBy { it.at }
+
+        if (events.isEmpty()) {
+            val msg = when {
+                panels.none { it.state.configured } -> "tap to sign in"
+                panels.any { it.state.windows.isNotEmpty() } -> "no resets known"
+                else -> "no data yet"
+            }
+            g.fitText(msg, w / 2f, h / 2f + 4f, 12f, 600, t.faint, w - pad * 2, Paint.Align.CENTER)
+            return
+        }
+
+        val next = events.first()
+        // Too small for an axis: say the one thing that matters.
+        if (w < 130f || h < 46f) {
+            val line = "${next.name} ${shortWindow(next.label)} · ${brief(next.at - now)}"
+            if (g.fitText(line, w / 2f, h / 2f + 4f, 11f, 600, t.text, w - 10f, Paint.Align.CENTER) == 0f) {
+                g.fitText(brief(next.at - now), w / 2f, h / 2f + 4f, 13f, 700, t.text, w - 6f, Paint.Align.CENTER)
+            }
+            return
+        }
+
+        // The header is the most informative thing on this widget — it names the next
+        // window by name, which the stems alone cannot. It gets the space before the
+        // time labels do, not after.
+        val showHead = h >= 54f
+        var top = pad
+        if (showHead) {
+            g.fitText("next back", pad, top + 9f, 9.5f, 700, t.faint, (w - pad * 2) * .34f, tracking = .06f)
+            // Amber when the numbers behind this headline are old — the same cue every
+            // other style carries. Without it this style would quietly present stale
+            // resets as current, which is the one thing a reset time must not do.
+            val headColor = if (isStale(next.state, staleAfterMs = t.staleAfterMs)) t.warn else t.dim
+            g.fitText(
+                "${next.name} ${shortWindow(next.label)} in ${brief(next.at - now)}",
+                w - pad, top + 9f, 10f, 600, headColor, (w - pad * 2) * .64f, Paint.Align.RIGHT,
+            )
+            top += 18f
+        }
+
+        val labelH = if (h >= 80f) 13f else 0f
+        val baseY = h - pad - labelH
+        // A very tall widget should not stretch the stems to absurdity — past this the
+        // chart stops gaining information and just gets sparse, so it sits on its axis
+        // at a readable height instead.
+        val plotH = (baseY - top - 6f).coerceIn(10f, 170f)
+        val plotX = pad + 2f
+        val plotW = (w - pad * 2 - 4f).coerceAtLeast(20f)
+        // The axis always spans at least half an hour so a single imminent reset does not
+        // sit on top of the origin, and the last event lands just inside the right edge.
+        val span = (events.last().at - now).coerceAtLeast(30 * 60_000L)
+
+        g.line(plotX, baseY, plotW, t.rule)
+
+        var lastRight = -1e9f
+        events.forEach { e ->
+            val f = ((e.at - now).toFloat() / span.toFloat()).coerceIn(0f, 1f)
+            // Inset so a stem at f = 1 keeps its dot inside the card.
+            val x = plotX + f * (plotW - 6f) + 3f
+            val stem = (plotH * (e.pct.coerceIn(0, 100) / 100f)).coerceAtLeast(4f)
+            // dotColor carries the not-configured and stale cases; the colour handed to it
+            // is the status-adjusted identity colour, so a fresh, healthy window still
+            // reads as its provider and a stale one goes amber like everywhere else.
+            val color = dotColor(e.state, t.status(e.pct, e.color), t)
+            g.rrect(x - 1.25f, baseY - stem, 2.5f, stem, 1.25f, withAlpha(color, 150))
+            g.circle(x, baseY - stem, 3.2f, color)
+
+            if (labelH > 0f) {
+                val txt = brief(e.at - now)
+                val tw = g.measure(txt, 9f, 600)
+                // Clustered resets would overprint each other; a label is skipped rather
+                // than drawn on top of its neighbour.
+                if (x - tw / 2f > lastRight + 4f && x + tw / 2f <= plotX + plotW) {
+                    g.text(txt, x, baseY + 11f, 9f, 600, t.faint, Paint.Align.CENTER)
+                    lastRight = x + tw / 2f
+                }
+            }
+        }
+    }
+
+    // --- runway -----------------------------------------------------------
+    // Do you run out before the window refills? Per-provider lanes on one shared axis:
+    // the bar runs to where the current burn projects exhaustion, the notch is the reset.
+    // Bar short of the notch means you make it; past it means you stall first.
+
+    private fun drawRunway(
+        g: Pen, w: Float, h: Float, snap: Snapshot, hist: List<HistoryPoint>, t: Theme, o: Opts,
+    ) {
+        g.card(w, h, o.opacity)
+        val panels = visible(snap, hist, t, o)
+        if (panels.isEmpty()) return
+        val now = System.currentTimeMillis()
+        val pad = 12f
+
+        class Lane(val name: String, val color: Int, val state: ProviderState, val win: Win?, val dry: Long?)
+        val lanes = panels.map { p ->
+            val b = binding(p.state)
+            Lane(p.name, p.color, p.state, b, b?.let { projection(it, p.series) })
+        }
+
+        // A shared axis is the whole point — the lanes are only comparable against the
+        // same clock. Clipped at 12h so a weekly window doesn't squash everything left.
+        val horizon = 12 * 3600_000L
+        val furthest = lanes.mapNotNull { l ->
+            listOfNotNull(l.win?.resetsAt?.takeIf { it > now }, l.dry).maxOrNull()
+        }.maxOrNull()
+        val span = (furthest?.minus(now) ?: horizon).coerceIn(30 * 60_000L, horizon)
+
+        val n = lanes.size
+        val showHead = h >= 78f
+        val headH = if (showHead) 16f else 0f
+        val room = h - pad * 2 - headH
+        // Capped, then the whole stack is centred in what is left: a 480dp-tall widget
+        // with two lanes would otherwise put 220dp of empty card between them.
+        val laneH = (room / n).coerceIn(14f, 64f)
+        if (laneH < 18f || w < 130f) { drawDense(g, w, h, panels, t); return }
+
+        if (showHead) {
+            // The headline is the finding, not a title: the provider that stalls soonest.
+            val worst = lanes.filter { it.dry != null }.minByOrNull { it.dry!! }
+            val head = when {
+                worst?.win != null && worst.win.resetsAt > now ->
+                    "${worst.name} runs dry ${brief(worst.win.resetsAt - worst.dry!!)} early"
+                worst != null -> "${worst.name} runs dry in ${brief(worst.dry!! - now)}"
+                lanes.any { it.win != null } -> "all within budget"
+                else -> "runway"
+            }
+            g.fitText(head, pad, pad + 9f, 10.5f, 700, if (worst != null) t.warn else t.faint,
+                w - pad * 2, tracking = .02f)
+        }
+        var y = pad + headH + (room - laneH * n).coerceAtLeast(0f) / 2f
+
+        val labelW = min(52f, w * .26f)
+        val axX = pad + labelW
+        val axW = (w - pad - axX).coerceAtLeast(24f)
+
+        lanes.forEach { l ->
+            val midY = y + laneH / 2f
+            g.fitText(l.name, pad, midY + 3.5f, 10.5f, 700,
+                nameColor(l.state, l.color, t), labelW - 6f)
+
+            val trackH = min(8f, laneH * .38f).coerceAtLeast(4f)
+            val trackY = midY - trackH / 2f
+            g.rrect(axX, trackY, axW, trackH, trackH / 2f, t.track)
+
+            val b = l.win
+            if (b == null) {
+                g.fitText(if (l.state.configured) "no data" else "sign in",
+                    axX + 3f, midY + 3.5f, 9.5f, 500, t.faint, axW - 6f)
+                y += laneH
+                return@forEach
+            }
+
+            fun xOf(at: Long): Float =
+                axX + ((at - now).toFloat() / span.toFloat()).coerceIn(0f, 1f) * axW
+
+            // Only a projection may be drawn on this track. Filling it by percent-used
+            // when no projection exists would put a proportion and a duration on the same
+            // axis, at the same scale, distinguishable only by opacity — the lane would
+            // read as a runway that isn't one. With no projection the track stays empty
+            // and the note carries the number instead.
+            if (l.dry != null) {
+                val end = xOf(l.dry)
+                if (end > axX + 1f) {
+                    g.rrect(axX, trackY, end - axX, trackH, trackH / 2f, t.status(b.pct, l.color))
+                }
+            }
+
+            // The reset notch: where capacity comes back.
+            if (b.resetsAt > now) {
+                val rx = xOf(b.resetsAt).coerceAtMost(axX + axW - 1.5f)
+                g.rrect(rx - 1f, trackY - 3f, 2f, trackH + 6f, 1f, t.text)
+            }
+
+            if (laneH >= 30f) {
+                val note = when {
+                    l.dry != null && b.resetsAt > now ->
+                        "dry in ${brief(l.dry - now)} · ${brief(b.resetsAt - l.dry)} short"
+                    l.dry != null -> "dry in ${brief(l.dry - now)}"
+                    b.resetsAt > now -> "${b.pct}% · back in ${brief(b.resetsAt - now)}"
+                    else -> "${b.pct}% used"
+                }
+                g.fitText(note, axX, midY + trackH / 2f + 12f, 9.5f, 500, t.faint, axW)
+            }
+            y += laneH
+        }
+    }
 
     private fun drawGraph(
         g: Pen, w: Float, h: Float, snap: Snapshot,

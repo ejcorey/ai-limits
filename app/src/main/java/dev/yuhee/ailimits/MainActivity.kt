@@ -43,22 +43,58 @@ import java.util.Locale
 class MainActivity : AppCompatActivity() {
 
     private val scope = MainScope()
+    private var claudeServer: ClaudeLoginServer? = null
     private var codexServer: CodexLoginServer? = null
     private var geminiServer: GeminiLoginServer? = null
+
+    /**
+     * Starts the Claude sign-in that needs no paste: open a loopback socket first so the
+     * authorize URL can name its port, then send the browser there.
+     *
+     * If the socket cannot be opened we fall through to the console page — the flow this
+     * app shipped for ten releases — rather than failing the sign-in outright.
+     */
+    private fun startClaudeLogin() {
+        claudeServer?.stop()
+        claudeServer = null
+        Prefs.clearClaudePending(this)
+
+        val state = java.util.UUID.randomUUID().toString().replace("-", "")
+        val server = try {
+            ClaudeLoginServer(applicationContext, state) { err ->
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    if (err != null) showError("Claude sign-in failed", RuntimeException(err))
+                    updateStatus()
+                }
+            }
+        } catch (_: Exception) {
+            null
+        }
+
+        if (server == null) {
+            openUrl(ClaudeApi.beginLogin(this, null))
+            toast("Approve access, copy the code, then tap “Paste code”")
+            return
+        }
+        claudeServer = server
+        // The URL has to carry the port the socket actually got, and the state the socket
+        // will check, so both are fixed before either is used.
+        val url = ClaudeApi.beginLogin(this, server.port, state)
+        server.start()
+        openUrl(url)
+        toast("Approve access — you'll come straight back here")
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         applyInsets()
 
-        findViewById<Button>(R.id.btnClaudeSignIn).setOnClickListener {
-            val url = ClaudeApi.beginLogin(this)
-            openUrl(url)
-            toast("Approve access, copy the code, come back and tap “Paste code”")
-        }
+        findViewById<Button>(R.id.btnClaudeSignIn).setOnClickListener { startClaudeLogin() }
 
         findViewById<Button>(R.id.btnClaudePaste).setOnClickListener {
-            promptText("Paste authorization code", "code#state from the browser") { text ->
+            promptText("Paste authorization code", "code#state, or the localhost link") { text ->
                 scope.launch {
                     try {
                         withContext(Dispatchers.IO) { ClaudeApi.finishLogin(this@MainActivity, text) }
@@ -261,7 +297,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun setUpPreview() {
         val styles = WidgetRenderer.Style.entries
-        val labels = listOf("Detail", "Slim bars", "Rings", "History", "Battery", "Countdown", "Ticker")
+        val labels = styles.map { it.label }
         spinner(R.id.spinnerStyle, labels, styles.indexOf(Settings.previewStyle(this))) { pos ->
             Settings.setPreviewStyle(this, styles[pos]); renderPreview(force = true)
         }
@@ -382,6 +418,63 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Lists the widgets actually on the home screen, each opening its own settings.
+     *
+     * Not a convenience: `reconfigurable` long-press editing needs API 31 and this app
+     * runs from 26, so on older devices this is the only route to a placed widget's
+     * settings — and inside a One UI widget stack the long-press item is often
+     * unreachable even on newer ones.
+     */
+    private fun renderPlacedWidgets() {
+        val container = findViewById<LinearLayout>(R.id.placedWidgets) ?: return
+        val header = findViewById<TextView>(R.id.placedHeader)
+        container.removeAllViews()
+        val ids = WidgetRenderer.allWidgetIds(this)
+        header?.visibility = if (ids.isEmpty()) View.GONE else View.VISIBLE
+        if (ids.isEmpty()) return
+
+        val snap = UsageRepo.load(this)
+        val hist = UsageRepo.history(this)
+        ids.forEach { id ->
+            val cfg = WidgetConfigStore.load(this, id)
+            val style = cfg?.style ?: WidgetRenderer.defaultStyleForWidget(this, id)
+            val (w, h) = WidgetRenderer.sizeOf(this, id)
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(10), 0, dp(10))
+                isClickable = true
+                setOnClickListener { startActivity(WidgetConfigActivity.intentFor(this@MainActivity, id)) }
+            }
+            row.addView(TextView(this).apply {
+                text = buildString {
+                    append(style.label)
+                    append(" · ${w.toInt()}×${h.toInt()} dp")
+                    if (cfg != null && !cfg.inheritsEverything) append(" · customised")
+                }
+                setTextColor(getColor(R.color.text))
+                textSize = 13f
+            })
+            // A thumbnail of the real thing: the row is otherwise indistinguishable from
+            // its neighbours when several widgets share a style.
+            runCatching {
+                val (bmp, _) = WidgetRenderer.render(
+                    this, style, w, h, snap, hist,
+                    o = WidgetRenderer.optsFor(cfg, WidgetRenderer.optsFrom(this)),
+                )
+                row.addView(ImageView(this).apply {
+                    setImageBitmap(bmp)
+                    adjustViewBounds = true
+                    scaleType = ImageView.ScaleType.FIT_START
+                    setPadding(0, dp(6), 0, 0)
+                }, LinearLayout.LayoutParams(dp(200), ViewGroup.LayoutParams.WRAP_CONTENT))
+            }
+            container.addView(row)
+        }
+    }
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    /**
      * Android 15 draws every targetSdk-35 app edge-to-edge, so the window no longer
      * insets content for the status bar or the gesture/navigation bar — the app has
      * to do it. Padding the scroll container keeps the whole screen inside the safe
@@ -400,6 +493,7 @@ class MainActivity : AppCompatActivity() {
         ViewCompat.requestApplyInsets(root)
     }
 
+    private var claudeExchangeInFlight = false
     private var codexExchangeInFlight = false
     private var geminiExchangeInFlight = false
 
@@ -414,6 +508,26 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updateStatus()
+        // Rebuilt on every resume, since returning from the config screen (or from the
+        // home screen after placing one) is exactly when this list goes stale.
+        renderPlacedWidgets()
+        // finish a Claude login whose code the loopback server caught behind the browser
+        if (!claudeExchangeInFlight && Prefs.claudePendingCode(this) != null) {
+            claudeExchangeInFlight = true
+            scope.launch {
+                try {
+                    withContext(Dispatchers.IO) { ClaudeApi.completePendingLogin(this@MainActivity) }
+                    toast("Claude signed in ✓")
+                    afterSetupChanged()
+                } catch (e: Exception) {
+                    showError("Claude sign-in failed", e)
+                    updateStatus()
+                } finally {
+                    claudeExchangeInFlight = false
+                }
+            }
+            return
+        }
         // finish a Codex login whose code was caught while we were behind the browser
         if (!codexExchangeInFlight && Prefs.codexPendingCode(this) != null) {
             codexExchangeInFlight = true
@@ -458,6 +572,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        claudeServer?.stop()
         codexServer?.stop()
         geminiServer?.stop()
         scope.cancel()
@@ -639,12 +754,36 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Text the clipboard is holding, if it plausibly *is* an auth code or callback link.
+     *
+     * Read only from here, i.e. only once the user has tapped a paste button and the
+     * dialog is up: Android gates clipboard reads on the calling app having window focus,
+     * so an opportunistic read from `onResume` returns null anyway, and reading at all
+     * raises a "pasted from your clipboard" notice the user has no reason to expect.
+     */
+    private fun clipboardCandidate(): String? {
+        val text = try {
+            (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager)
+                .primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text?.toString()?.trim()
+        } catch (_: Exception) { null } ?: return null
+        if (text.isEmpty() || text.length > 4096 || text.any { it == '\n' }) return null
+        val looksLikeCallback = text.contains("code=") && text.contains("://")
+        val looksLikeConsoleCode = text.contains('#') && !text.contains(' ') && text.length in 16..512
+        return text.takeIf { looksLikeCallback || looksLikeConsoleCode }
+    }
+
     private fun promptText(title: String, hint: String, onOk: (String) -> Unit) {
+        val prefill = clipboardCandidate()
         val edit = EditText(this).apply {
             this.hint = hint
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
             minLines = 1
             maxLines = 8
+            if (prefill != null) {
+                setText(prefill)
+                setSelection(prefill.length)
+            }
         }
         val wrap = FrameLayout(this).apply {
             setPadding(48, 24, 48, 0)

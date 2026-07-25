@@ -19,16 +19,37 @@ object Prefs {
 
     fun clearClaude(ctx: Context) {
         p(ctx).edit().remove("cl_access").remove("cl_refresh").remove("cl_exp")
-            .remove("cl_verifier").remove("cl_state").remove("keys_claude").apply()
+            .remove("cl_verifier").remove("cl_state").remove("cl_redirect").remove("cl_pending")
+            .remove("keys_claude").apply()
     }
 
-    // PKCE in-flight state (survives process death while browser is open)
-    fun setClaudeFlow(ctx: Context, verifier: String, state: String) {
-        p(ctx).edit().putString("cl_verifier", verifier).putString("cl_state", state).apply()
+    // PKCE in-flight state (survives process death while browser is open).
+    // The redirect is stored with it because OAuth requires the token exchange to echo
+    // the *same* redirect_uri the authorize call used, and this app now has two: an
+    // ephemeral loopback URL and the console paste URL.
+    fun setClaudeFlow(ctx: Context, verifier: String, state: String, redirect: String) {
+        p(ctx).edit().putString("cl_verifier", verifier).putString("cl_state", state)
+            .putString("cl_redirect", redirect).apply()
     }
 
-    fun claudeFlow(ctx: Context): Pair<String?, String?> =
-        Pair(p(ctx).getString("cl_verifier", null), p(ctx).getString("cl_state", null))
+    /**
+     * Third element is null for a sign-in that was already in flight when the app was
+     * updated to a version that records the redirect. Callers must read that as the
+     * console redirect — the only one older versions could have used — so an interrupted
+     * login still completes instead of failing on a redirect_uri mismatch.
+     */
+    fun claudeFlow(ctx: Context): Triple<String?, String?, String?> = Triple(
+        p(ctx).getString("cl_verifier", null),
+        p(ctx).getString("cl_state", null),
+        p(ctx).getString("cl_redirect", null),
+    )
+
+    fun setClaudePendingCode(ctx: Context, code: String) =
+        p(ctx).edit().putString("cl_pending", code).apply()
+
+    fun claudePendingCode(ctx: Context): String? = p(ctx).getString("cl_pending", null)
+
+    fun clearClaudePending(ctx: Context) = p(ctx).edit().remove("cl_pending").apply()
 
     // --- Codex OAuth ---
     fun codexTokens(ctx: Context): CodexTokens? {

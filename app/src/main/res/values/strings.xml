@@ -23,4 +23,15 @@
 
     <string name="widget_ticker_label">Auspex · Ticker</string>
     <string name="widget_ticker_desc">A one-line readout of every provider — the smallest possible footprint.</string>
+
+    <string name="widget_pick_label">Auspex · Pick</string>
+    <string name="widget_pick_desc">One answer: which AI has the most room right now, in big type. Fits a single cell.</string>
+
+    <string name="widget_horizon_label">Auspex · Horizon</string>
+    <string name="widget_horizon_desc">Every upcoming reset on one timeline, including the windows the other styles hide.</string>
+
+    <string name="widget_runway_label">Auspex · Runway</string>
+    <string name="widget_runway_desc">Whether you run out before each limit refills — the bar is your burn, the notch is the reset.</string>
+
+    <string name="widget_config_title">Configure widget</string>
 </resources>

@@ -164,6 +164,99 @@ class WidgetRenderTest {
         }
     }
 
+    /**
+     * The images the launcher's widget picker shows, rendered by the real renderer into
+     * build/widget-previews for copying into res/drawable-nodpi.
+     *
+     * Hand-made previews go stale silently — a user picks a style from a picture the app
+     * no longer draws. Generating them from the same code path as the widget itself means
+     * refreshing them is one command, and they can never show a layout that no longer
+     * exists.
+     */
+    @Test
+    fun widgetPickerPreviews() {
+        dark()
+        val dir = File("build/widget-previews").apply { mkdirs() }
+        // Roughly the cell footprint each style declares as its target.
+        val sizes = mapOf(
+            WidgetRenderer.Style.DETAIL to (264f to 176f),
+            WidgetRenderer.Style.BARS to (264f to 80f),
+            WidgetRenderer.Style.RINGS to (220f to 120f),
+            WidgetRenderer.Style.GRAPH to (264f to 140f),
+            WidgetRenderer.Style.BATTERY to (198f to 96f),
+            WidgetRenderer.Style.COUNTDOWN to (198f to 96f),
+            WidgetRenderer.Style.TICKER to (264f to 52f),
+            WidgetRenderer.Style.PICK to (110f to 110f),
+            WidgetRenderer.Style.HORIZON to (264f to 120f),
+            WidgetRenderer.Style.RUNWAY to (264f to 120f),
+        )
+        val o = WidgetRenderer.Opts(showGemini = true)
+        for (style in WidgetRenderer.Style.entries) {
+            val (w, h) = sizes.getValue(style)
+            val (bmp, _) = WidgetRenderer.render(ctx, style, w, h, snap(), history, o = o)
+            File(dir, "preview_${style.name.lowercase()}.png").outputStream()
+                .use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
+        // getValue above throws on a style with no declared size, so a new style cannot
+        // ship without one — which is how the old parallel label list went stale.
+        assertTrue("every style needs a preview size", sizes.size == WidgetRenderer.Style.entries.size)
+    }
+
+    /**
+     * Every style must actually PAINT the amber staleness cue when a provider's numbers
+     * have gone old — asserted against the pixels, not asserted in a release note.
+     *
+     * "Every style shows the staleness cue" has been claimed and been false twice in this
+     * app (Rings and Graph the first time, Horizon the second), each time because it was
+     * checked by reading the code rather than by looking at the output. This counts the
+     * warn-coloured pixels instead.
+     */
+    @Test
+    fun everyStyleShowsTheStalenessCue() {
+        dark()
+        val warn = ctx.getColor(R.color.warn)
+        // All three have gone quiet. Staleness has to be asserted on every provider
+        // because Pick draws only ONE of them — the one with the most headroom — so a
+        // fixture where just one provider is old proves nothing about that style.
+        // The fresh comparison below is what stops a style passing by painting amber
+        // unconditionally.
+        val stale = Snapshot(
+            ProviderState(true, listOf(Win("5h", 68, now + 3 * hour, lengthMs = 5 * hour)), null, null, now - 3 * hour),
+            ProviderState(true, listOf(Win("5h", 41, now + hour, lengthMs = 5 * hour)), null, "plus", now - 3 * hour),
+            now - 3 * hour,
+            ProviderState(true, listOf(Win("Pro", 37, now + 9 * hour)), null, "free-tier", now - 3 * hour),
+        )
+        val fresh = snap()
+        val o = WidgetRenderer.Opts(showGemini = true)
+
+        fun warnPixels(s: Snapshot, style: WidgetRenderer.Style, tag: String): Int {
+            val (bmp, _) = WidgetRenderer.render(ctx, style, 264f, 160f, s, history, o = o)
+            File(out, "cue-$tag-${style.name.lowercase()}.png").outputStream()
+                .use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            val px = IntArray(bmp.width * bmp.height)
+            bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+            // Antialiased glyph edges blend toward the background, so the core pixels are
+            // matched with a small tolerance rather than exactly.
+            return px.count { p ->
+                kotlin.math.abs(android.graphics.Color.red(p) - android.graphics.Color.red(warn)) < 12 &&
+                    kotlin.math.abs(android.graphics.Color.green(p) - android.graphics.Color.green(warn)) < 12 &&
+                    kotlin.math.abs(android.graphics.Color.blue(p) - android.graphics.Color.blue(warn)) < 12 &&
+                    android.graphics.Color.alpha(p) > 200
+            }
+        }
+
+        val report = WidgetRenderer.Style.entries.map { style ->
+            Triple(style, warnPixels(stale, style, "stale"), warnPixels(fresh, style, "fresh"))
+        }
+        val bad = report.filter { (_, stalePx, freshPx) -> stalePx <= freshPx + 20 }
+        assertTrue(
+            "styles with no staleness cue: " +
+                bad.joinToString { (s, a, b) -> "$s(stale=$a fresh=$b)" } +
+                " | warn=#${Integer.toHexString(warn)}",
+            bad.isEmpty(),
+        )
+    }
+
     /** Every height in the resizable range must draw without throwing. */
     @Test
     fun everyHeightInRangeRenders() {

@@ -21,6 +21,19 @@
             </intent-filter>
         </activity>
 
+        <!--
+            Per-widget settings. Must be its own activity: MainActivity is the LAUNCHER
+            entry and singleTop, which the configure contract does not tolerate.
+        -->
+        <activity
+            android:name=".WidgetConfigActivity"
+            android:label="@string/widget_config_title"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+
         <receiver
             android:name=".UsageWidgetProvider"
             android:label="@string/widget_detail_label"
@@ -104,6 +117,42 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/widget_info_ticker" />
+        </receiver>
+
+        <receiver
+            android:name=".PickWidgetProvider"
+            android:label="@string/widget_pick_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info_pick" />
+        </receiver>
+
+        <receiver
+            android:name=".HorizonWidgetProvider"
+            android:label="@string/widget_horizon_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info_horizon" />
+        </receiver>
+
+        <receiver
+            android:name=".RunwayWidgetProvider"
+            android:label="@string/widget_runway_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info_runway" />
         </receiver>
 
     </application>

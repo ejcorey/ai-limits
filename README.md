@@ -10,17 +10,21 @@ Grab `AILimits.apk` from the [latest release](../../releases/latest) and open it
 
 ## Setup
 
-1. Open **AI Limits**.
-2. **Claude → Sign in**: approve access in the browser, copy the code shown, return and tap **Paste code**.
+1. Open **Auspex**.
+2. **Claude → Sign in**: approve access in the browser and you come straight back — the app catches the redirect itself on a loopback listener, the same way Claude Code does (an OS-assigned port, path `/callback`).
 3. **Codex → Sign in with ChatGPT**: log in in the browser; the app catches the redirect automatically (loopback listener on `localhost:1455`, same mechanism Codex CLI uses).
 4. **Gemini → Sign in**: log in with Google; the app catches the redirect the same way (loopback on `localhost:7856`, the mechanism Gemini CLI uses). What's shown is the per-model Code Assist quota — the pool Gemini CLI draws from — with your tier as a chip.
-5. Long-press your home screen → **Widgets → AI Limits** to add the widget.
+5. Long-press your home screen → **Widgets → Auspex** to add a widget.
+
+No provider needs a copy-and-paste step any more. Each still has a **Paste** button as a
+fallback for the case where the browser reaches the listener but Android has killed the app
+behind it — paste the address-bar URL and the sign-in completes.
 
 The widget refreshes every 30 minutes (WorkManager); tap it to refresh immediately.
 
 ## Widget styles
 
-Seven styles, all drawn on a canvas so they scale properly instead of clipping:
+Ten styles, all drawn on a canvas so they scale properly instead of clipping:
 
 | Style | Default size | Shows |
 | --- | --- | --- |
@@ -31,8 +35,27 @@ Seven styles, all drawn on a canvas so they scale properly instead of clipping:
 | **Battery** | 3×1 | The inverse framing: each AI as a battery showing how much is *left* |
 | **Countdown** | 4×1 | Time-first: when each limit resets, with a bar of how far through the window you are |
 | **Ticker** | 4×1 | One dense line of text, every provider — the smallest footprint there is |
+| **Pick** | 1×1 | One verdict: which AI has the most room right now, in the biggest type that fits |
+| **Horizon** | 4×2 | Every upcoming reset on one forward timeline — the only view of the windows that are *not* binding |
+| **Runway** | 4×2 | Whether you run dry before each limit refills: the bar is where your burn rate lands, the notch is the reset |
+
+**Pick** is the only style that needs no history at all, so it is fully populated one fetch
+after signing in — and the only one that reads at a single cell. **Horizon** is the only
+style that shows Claude's 7-day/Opus/Sonnet windows, a Codex secondary window, or Gemini's
+per-model buckets; every other style keeps just the tightest one. **Runway** stays empty
+until there is enough recent history to measure a burn rate, rather than drawing a
+projection it cannot support.
 
 **Detail** re-lays itself out for the size you drag it to — from a two-column glance at 4×1, through a bar-per-provider at 4×2, to the full hero layout with per-provider 12-hour sparklines and a footer when it is tall enough. Every style is resizable to any cell count the launcher offers and drops its least important element rather than clipping: ring captions disappear before the dials shrink, the chart sheds its axes before the plot does, and dragging a widget taller grows the charts instead of leaving a gap.
+
+## Per-widget settings
+
+Every setting below is an app-wide **default**. Any single placed widget can override it:
+tap it under **Your widgets** in the app, or long-press it on the home screen (Android 12+).
+So a Ticker showing only Claude can sit next to a Runway showing all three.
+
+A widget you have not configured has no stored record at all, and keeps following the app
+defaults — including after an update, which is asserted by a test rather than assumed.
 
 ## Settings
 

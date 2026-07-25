@@ -158,17 +158,19 @@
                     style="@style/Widget.Material3.Button.TonalButton"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
+                    android:layout_weight="2"
                     android:text="Sign in" />
 
                 <Button
                     android:id="@+id/btnClaudePaste"
-                    style="@style/Widget.Material3.Button.TonalButton"
-                    android:layout_width="0dp"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:layout_weight="1"
-                    android:text="Paste code" />
+                    android:layout_marginStart="4dp"
+                    android:minWidth="0dp"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:text="Paste" />
 
                 <Button
                     android:id="@+id/btnClaudeSignOut"
@@ -237,12 +239,14 @@
 
                 <Button
                     android:id="@+id/btnCodexPaste"
-                    style="@style/Widget.Material3.Button.TonalButton"
-                    android:layout_width="0dp"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:layout_weight="1"
-                    android:text="Paste link" />
+                    android:layout_marginStart="4dp"
+                    android:minWidth="0dp"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:text="Paste" />
 
                 <Button
                     android:id="@+id/btnCodexSignOut"
@@ -311,12 +315,14 @@
 
                 <Button
                     android:id="@+id/btnGeminiPaste"
-                    style="@style/Widget.Material3.Button.TonalButton"
-                    android:layout_width="0dp"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:layout_weight="1"
-                    android:text="Paste link" />
+                    android:layout_marginStart="4dp"
+                    android:minWidth="0dp"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:text="Paste" />
 
                 <Button
                     android:id="@+id/btnGeminiSignOut"
@@ -569,11 +575,28 @@
         </LinearLayout>
 
         <TextView
+            android:id="@+id/placedHeader"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="Your widgets"
+            android:textColor="@color/text"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:id="@+id/placedWidgets"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+
+        <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
             android:layout_marginBottom="8dp"
-            android:text="Add a widget: long-press the home screen → Widgets → Auspex. All four styles resize; the Detail one changes layout as you drag it."
+            android:text="Add a widget: long-press the home screen → Widgets → Auspex. Every style resizes, and each placed widget can be set up on its own — tap it above, or long-press it on the home screen."
             android:textColor="@color/text2"
             android:textSize="12sp" />
     </LinearLayout>

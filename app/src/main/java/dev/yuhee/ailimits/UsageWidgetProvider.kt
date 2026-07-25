@@ -41,6 +41,15 @@ abstract class BaseWidgetProvider : AppWidgetProvider() {
     override fun onDisabled(context: Context) {
         if (!WidgetRenderer.anyWidgets(context)) RefreshWorker.cancelPeriodic(context)
     }
+
+    /**
+     * Drop a removed widget's own configuration. [WidgetConfigStore.reap] would catch this
+     * eventually, but only on the next full redraw — and this callback is the only signal
+     * that arrives immediately.
+     */
+    override fun onDeleted(context: Context, appWidgetIds: IntArray) {
+        appWidgetIds.forEach { WidgetConfigStore.delete(context, it) }
+    }
 }
 
 class UsageWidgetProvider : BaseWidgetProvider() {
@@ -58,9 +67,15 @@ class UsageWidgetProvider : BaseWidgetProvider() {
     }
 }
 
+// These class names are a permanent contract: a placed widget is bound to its receiver,
+// so renaming or removing one deletes every instance of it from every home screen, with
+// no way back. Per-instance styles do not change that — do not consolidate them.
 class BarsWidgetProvider : BaseWidgetProvider()
 class PercentWidgetProvider : BaseWidgetProvider()
 class GraphWidgetProvider : BaseWidgetProvider()
 class BatteryWidgetProvider : BaseWidgetProvider()
 class CountdownWidgetProvider : BaseWidgetProvider()
 class TickerWidgetProvider : BaseWidgetProvider()
+class PickWidgetProvider : BaseWidgetProvider()
+class HorizonWidgetProvider : BaseWidgetProvider()
+class RunwayWidgetProvider : BaseWidgetProvider()
