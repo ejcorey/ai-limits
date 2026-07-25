@@ -11,7 +11,11 @@ abstract class BaseWidgetProvider : AppWidgetProvider() {
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
         WidgetRenderer.updateAll(context)
         RefreshWorker.schedulePeriodic(context)
-        RefreshWorker.refreshNow(context)
+        // Redrawing is free; fetching is not. The framework ticks this every 30 minutes
+        // whatever interval the user picked, so it only reaches for the network when the
+        // data it has is actually older than that interval. A freshly added widget has
+        // no data and is therefore always due.
+        if (RefreshWorker.isDue(context)) RefreshWorker.refreshNow(context)
     }
 
     /**
@@ -29,6 +33,7 @@ abstract class BaseWidgetProvider : AppWidgetProvider() {
     }
 
     override fun onEnabled(context: Context) {
+        // First widget of this style placed — always worth a fetch.
         RefreshWorker.schedulePeriodic(context)
         RefreshWorker.refreshNow(context)
     }

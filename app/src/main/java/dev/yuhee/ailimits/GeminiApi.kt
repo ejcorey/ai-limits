@@ -37,6 +37,8 @@ object GeminiApi {
     private const val AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
     private const val TOKEN_URL = "https://oauth2.googleapis.com/token"
     private const val ENDPOINT = "https://cloudcode-pa.googleapis.com"
+    /** How long a cached project + tier is trusted before being re-confirmed. */
+    private const val PROJECT_TTL_MS = 24 * 3600_000L
     private const val SCOPES = "https://www.googleapis.com/auth/cloud-platform " +
         "https://www.googleapis.com/auth/userinfo.email " +
         "https://www.googleapis.com/auth/userinfo.profile"
@@ -164,14 +166,24 @@ object GeminiApi {
      * which is a long-running operation we poll briefly.
      */
     private fun ensureProject(ctx: Context, access: String): Pair<String, String?> {
-        Prefs.geminiProject(ctx).let { (p, t) -> if (!p.isNullOrEmpty()) return p to t }
+        val (cachedProject, cachedTier) = Prefs.geminiProject(ctx)
+        val cachedAge = System.currentTimeMillis() - Prefs.geminiProjectAt(ctx)
+        val cacheFresh = cachedAge in 0 until PROJECT_TTL_MS
+        // The tier drives the plan chip, and a plan can change. Caching it once and never
+        // looking again meant an upgrade from the free tier displayed "Free" forever.
+        if (!cachedProject.isNullOrEmpty() && cacheFresh) return cachedProject to cachedTier
 
         val load = Net.postJson(
             "$ENDPOINT/v1internal:loadCodeAssist",
             JSONObject().put("metadata", clientMetadata()).toString(),
             authHeaders(access),
         )
-        if (load.code !in 200..299) throw RuntimeException("Gemini setup failed (HTTP ${load.code})")
+        if (load.code !in 200..299) {
+            // Re-confirming is opportunistic: a hiccup here must not cost the user their
+            // usage numbers when we already know which project to ask about.
+            if (!cachedProject.isNullOrEmpty()) return cachedProject to cachedTier
+            throw RuntimeException("Gemini setup failed (HTTP ${load.code})")
+        }
         val lj = JSONObject(load.body)
         val tier = lj.optJSONObject("paidTier")?.optString("id", "")?.ifEmpty { null }
             ?: lj.optJSONObject("currentTier")?.optString("id", "")?.ifEmpty { null }
@@ -227,10 +239,14 @@ object GeminiApi {
         }
         if (r.code !in 200..299) throw RuntimeException("Gemini usage failed (HTTP ${r.code})")
         Schema.record(ctx, "gemini", r.body)
+        // Remember which models have ever reported quota, so a later zero from one of
+        // them is recognised as exhaustion rather than discarded as "no allowance".
+        val everLive = Prefs.geminiLiveModels(ctx)
+        runCatching { Prefs.setGeminiLiveModels(ctx, everLive + liveModels(r.body)) }
         // Kept so a wrong number on the home screen can be traced to the raw bucket
         // that produced it, instead of reasoned about from a screenshot.
         runCatching { Prefs.setGeminiBuckets(ctx, bucketSummary(r.body)) }
-        return parseQuota(r.body) to prettyTier(tier)
+        return parseQuota(r.body, everLive) to prettyTier(tier)
     }
 
     /**
@@ -253,7 +269,7 @@ object GeminiApi {
      *    ("Pro", "Flash") keeping the FULLEST, so one spent sibling poisoned the family.
      *    Model quotas are separate limits and are now shown separately.
      */
-    internal fun parseQuota(body: String): List<Win> {
+    internal fun parseQuota(body: String, everLive: Set<String> = emptySet()): List<Win> {
         val j = JSONObject(body)
         val buckets = j.optJSONArray("buckets") ?: JSONArray()
         val out = mutableListOf<Win>()
@@ -262,6 +278,7 @@ object GeminiApi {
 
         for (i in 0 until buckets.length()) {
             val o = buckets.optJSONObject(i) ?: continue
+            val modelId = o.optString("modelId", "")
             val frac = o.optDouble("remainingFraction", Double.NaN)
             if (frac.isNaN()) continue
             sawBucket = true
@@ -269,8 +286,12 @@ object GeminiApi {
             // remainingAmount is a numeric string (Gemini CLI parseInt's it the same way).
             val remaining = o.optString("remainingAmount", "").trim()
                 .takeIf { it.isNotEmpty() }?.toLongOrNull()?.takeIf { it >= 0 }
-            // Nothing left AND no count to prove it is a bucket we cannot interpret.
-            if (frac <= 0.0 && remaining == null) continue
+            // Nothing left, no count, and never seen with quota: this bucket cannot be
+            // told apart from a model that simply has no allowance on this tier, and
+            // reporting it as fully spent is what made a healthy account read 0% left.
+            // Once a model HAS been seen holding quota, a later zero is real exhaustion
+            // and must be shown — otherwise the app goes quiet exactly when it matters.
+            if (frac <= 0.0 && remaining == null && modelId !in everLive) continue
 
             val pct = ((1 - frac.coerceIn(0.0, 1.0)) * 100).roundToInt().coerceIn(0, 100)
             val reset = parseIso(o.optString("resetTime", ""))
@@ -278,11 +299,12 @@ object GeminiApi {
 
             // Labels key the per-window hide toggles and the alert de-dup, so they have
             // to be unique even if two model ids shorten to the same thing.
-            var label = modelLabel(o.optString("modelId", ""))
+            var label = modelLabel(modelId)
             if (!used.add(label)) {
+                // Derived from the model id, never from its position in the array.
+                label = "$label ${shortHash(modelId)}"
                 var n = 2
-                while (!used.add("$label $n")) n++
-                label = "$label $n"
+                while (!used.add(label)) { label = "$label-$n"; n++ }
             }
             out.add(Win(label, pct, reset, remaining, unit))
         }
@@ -298,6 +320,26 @@ object GeminiApi {
         return out
     }
 
+    /** Model ids seen holding quota in this response. */
+    internal fun liveModels(body: String): Set<String> = try {
+        val buckets = JSONObject(body).optJSONArray("buckets") ?: JSONArray()
+        (0 until buckets.length()).mapNotNull { i ->
+            val o = buckets.optJSONObject(i) ?: return@mapNotNull null
+            val frac = o.optDouble("remainingFraction", Double.NaN)
+            val id = o.optString("modelId", "")
+            if (!frac.isNaN() && frac > 0.0 && id.isNotEmpty()) id else null
+        }.toSet()
+    } catch (_: Exception) {
+        emptySet()
+    }
+
+    /** Stable four-character tag for disambiguating two models that shorten alike. */
+    private fun shortHash(id: String): String {
+        var h = 0
+        id.forEach { h = h * 31 + it.code }
+        return Integer.toHexString(h ushr 8 and 0xFFFF).padStart(4, '0')
+    }
+
     /**
      * A compact, values-included summary of the raw buckets, for diagnostics. Model ids
      * and usage fractions are not credentials, and having them is the difference between
@@ -307,7 +349,11 @@ object GeminiApi {
         val buckets = JSONObject(body).optJSONArray("buckets") ?: JSONArray()
         (0 until buckets.length()).mapNotNull { i ->
             val o = buckets.optJSONObject(i) ?: return@mapNotNull null
-            val id = o.optString("modelId", "?")
+            // Model ids are not credentials, but they are server-controlled strings
+            // headed for the clipboard, so a project-qualified id cannot ride along.
+            val id = o.optString("modelId", "?").takeLast(48).filter {
+                it.isLetterOrDigit() || it == '-' || it == '.' || it == '_'
+            }.ifEmpty { "?" }
             val frac = o.optDouble("remainingFraction", Double.NaN)
             val amt = o.optString("remainingAmount", "")
             buildString {
@@ -330,7 +376,7 @@ object GeminiApi {
         val cleaned = id.lowercase()
             .removePrefix("models/")
             .removePrefix("gemini-")
-            .replace(Regex("-(preview|latest|exp|experimental)(-[0-9]{2,})?$"), "")
+            .replace(Regex("-(preview|latest|exp|experimental)(-[0-9]+)*$"), "")
             .trim('-')
         if (cleaned.isEmpty()) return "daily"
         val label = cleaned.split('-', '_')

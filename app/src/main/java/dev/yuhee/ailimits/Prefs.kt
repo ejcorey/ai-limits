@@ -95,7 +95,8 @@ object Prefs {
     fun clearGemini(ctx: Context) {
         p(ctx).edit().remove("gm_access").remove("gm_refresh").remove("gm_exp")
             .remove("gm_verifier").remove("gm_state").remove("gm_pending")
-            .remove("gm_project").remove("gm_tier").remove("keys_gemini")
+            .remove("gm_project").remove("gm_tier").remove("gm_project_at").remove("keys_gemini")
+            .remove("gm_live")
             .remove("gm_buckets").apply()
     }
 
@@ -120,7 +121,11 @@ object Prefs {
         Pair(p(ctx).getString("gm_project", null), p(ctx).getString("gm_tier", null))
 
     fun setGeminiProject(ctx: Context, project: String, tier: String?) =
-        p(ctx).edit().putString("gm_project", project).putString("gm_tier", tier).apply()
+        p(ctx).edit().putString("gm_project", project).putString("gm_tier", tier)
+            .putLong("gm_project_at", System.currentTimeMillis()).apply()
+
+    /** When the project/tier was last confirmed with the server; 0 = unknown. */
+    fun geminiProjectAt(ctx: Context): Long = p(ctx).getLong("gm_project_at", 0)
 
     /**
      * Field names seen in the last usage response of each provider — names only, never
@@ -134,8 +139,15 @@ object Prefs {
     fun setResponseKeys(ctx: Context, provider: String, keys: String) =
         // Marked when cut, so a truncated tail is never mistaken for a real field name.
         p(ctx).edit()
-            .putString("keys_$provider", if (keys.length <= 600) keys else keys.take(597) + "…")
+            .putString("keys_$provider", if (keys.length <= 600) keys else keys.take(580) + "… (cut)")
             .apply()
+
+    /** Gemini models ever seen holding quota; lets a later zero read as exhaustion. */
+    fun geminiLiveModels(ctx: Context): Set<String> =
+        HashSet(p(ctx).getStringSet("gm_live", emptySet()) ?: emptySet())
+
+    fun setGeminiLiveModels(ctx: Context, ids: Set<String>) =
+        p(ctx).edit().putStringSet("gm_live", HashSet(ids.take(40))).apply()
 
     /**
      * Raw Gemini bucket values from the last fetch (model id, remaining fraction and

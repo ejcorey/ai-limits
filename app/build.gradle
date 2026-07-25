@@ -11,8 +11,8 @@ android {
         applicationId "dev.yuhee.ailimits"
         minSdk 26
         targetSdk 35
-        versionCode 13
-        versionName "2.9"
+        versionCode 14
+        versionName "3.0"
     }
 
     // Local keystore is not committed; clones without it get an unsigned release build.

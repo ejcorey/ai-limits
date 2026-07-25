@@ -63,12 +63,13 @@ object UsageRepo {
         val raw = Prefs.snapshot(ctx) ?: return empty(ctx)
         return try {
             val j = JSONObject(raw)
+            val snapshotTime = j.optLong("fetchedAt", 0)
             Snapshot(
-                parseProvider(j.optJSONObject("claude"), configuredClaude(ctx)),
-                parseProvider(j.optJSONObject("codex"), configuredCodex(ctx)),
-                j.optLong("fetchedAt", 0),
+                parseProvider(j.optJSONObject("claude"), configuredClaude(ctx), snapshotTime),
+                parseProvider(j.optJSONObject("codex"), configuredCodex(ctx), snapshotTime),
+                snapshotTime,
                 // Absent in snapshots written before v2.4 — parses to an empty state.
-                parseProvider(j.optJSONObject("gemini"), configuredGemini(ctx)),
+                parseProvider(j.optJSONObject("gemini"), configuredGemini(ctx), snapshotTime),
             )
         } catch (_: Exception) {
             empty(ctx)
@@ -86,7 +87,14 @@ object UsageRepo {
     private fun configuredCodex(ctx: Context) = Prefs.codexTokens(ctx) != null
     private fun configuredGemini(ctx: Context) = Prefs.geminiTokens(ctx).first != null
 
-    private fun parseProvider(j: JSONObject?, configured: Boolean): ProviderState {
+    /**
+     * @param snapshotTime when the snapshot as a whole was written. Used as the fallback
+     * for a provider that has no timestamp of its own, which is every provider in a
+     * snapshot written before per-provider times existed. Defaulting those to 0 marked
+     * the whole app stale the moment it was updated, and silenced alerts until the next
+     * refresh — the snapshot-wide time is exactly what that field used to mean.
+     */
+    private fun parseProvider(j: JSONObject?, configured: Boolean, snapshotTime: Long = 0): ProviderState {
         if (j == null) return ProviderState(configured, emptyList(), null)
         val wins = mutableListOf<Win>()
         val arr = j.optJSONArray("w") ?: JSONArray()
@@ -114,7 +122,7 @@ object UsageRepo {
             wins,
             j.optString("e", "").ifEmpty { null },
             j.optString("plan", "").ifEmpty { null },
-            j.optLong("t", 0L),
+            j.optLong("t", snapshotTime),
         )
     }
 
@@ -195,6 +203,21 @@ object UsageRepo {
             appendHistory(ctx, snap, claudeOk, codexOk, geminiOk, fetchedAt)
         }
         return snap
+    }
+
+    /**
+     * Drops one provider's stored numbers. Signing out used to leave them in the
+     * snapshot; every style then kept painting the last-known percentage, and the
+     * staleness check could not flag it because that short-circuits on !configured.
+     */
+    @Synchronized
+    fun forget(ctx: Context, provider: String) {
+        val raw = Prefs.snapshot(ctx) ?: return
+        runCatching {
+            val j = JSONObject(raw)
+            j.put(provider, JSONObject().put("w", JSONArray()).put("e", "").put("plan", "").put("t", 0))
+            Prefs.setSnapshot(ctx, j.toString())
+        }
     }
 
     /** History of binding-window utilization. Stored as [t, claude, codex, gemini]; -1 = unknown. */

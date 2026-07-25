@@ -72,7 +72,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.btnClaudeSignOut).setOnClickListener {
-            Prefs.clearClaude(this); updateStatus(); WidgetRenderer.updateAll(this)
+            Prefs.clearClaude(this); UsageRepo.forget(this, "claude")
+            updateStatus(); WidgetRenderer.updateAll(this)
         }
 
         findViewById<Button>(R.id.btnCodexSignIn).setOnClickListener {
@@ -110,7 +111,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.btnCodexSignOut).setOnClickListener {
-            Prefs.clearCodex(this); updateStatus(); WidgetRenderer.updateAll(this)
+            Prefs.clearCodex(this); UsageRepo.forget(this, "codex")
+            updateStatus(); WidgetRenderer.updateAll(this)
         }
 
         findViewById<Button>(R.id.btnGeminiSignIn).setOnClickListener {
@@ -147,7 +149,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.btnGeminiSignOut).setOnClickListener {
-            Prefs.clearGemini(this); updateStatus(); WidgetRenderer.updateAll(this)
+            Prefs.clearGemini(this); UsageRepo.forget(this, "gemini")
+            updateStatus(); WidgetRenderer.updateAll(this)
         }
 
         findViewById<Button>(R.id.btnRefresh).setOnClickListener { refreshNowUi() }

@@ -120,6 +120,18 @@ class UsageRepoTest {
         assertEquals("daily window", WidgetRenderer.windowName("daily"))
     }
 
+    /**
+     * A provider counts as "configured" only when tokens exist, and isStale short-circuits
+     * on that — so freshness assertions are vacuous without this.
+     */
+    private fun signIn(ctx: android.content.Context) {
+        Prefs.setClaudeTokens(ctx, "access", "refresh", System.currentTimeMillis() + 3_600_000)
+        Prefs.setCodexTokens(
+            ctx,
+            CodexTokens("access", "refresh", null, "acct-1234", System.currentTimeMillis() + 3_600_000),
+        )
+    }
+
     // ---- Gemini quota parsing --------------------------------------------
 
     @Test
@@ -280,6 +292,45 @@ class UsageRepoTest {
         assertEquals(68, snap.claude.windows.single().pct)
         assertEquals(1234L, snap.fetchedAt)
         assertTrue("gemini defaults to empty, not a crash", snap.gemini.windows.isEmpty())
+    }
+
+    /**
+     * Per-provider timestamps arrived in v2.8. A snapshot written before that has none,
+     * and defaulting them to 0 meant every provider read as stale the moment the app
+     * updated — amber everywhere and all alerts silenced until the next refresh. The
+     * snapshot-wide time is what that field used to mean, so it is the right fallback.
+     */
+    @Test
+    fun `a snapshot without per-provider times inherits the snapshot time`() {
+        val ctx = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        signIn(ctx)
+        val written = System.currentTimeMillis() - 5 * 60_000
+        Prefs.setSnapshot(ctx, """
+            {"claude":{"w":[{"l":"5h","p":68,"r":0}],"e":"","plan":""},
+             "codex":{"w":[{"l":"7d","p":22,"r":0}],"e":"","plan":"plus"},
+             "fetchedAt":$written}
+        """.trimIndent())
+        val snap = UsageRepo.load(ctx)
+        assertEquals(written, snap.claude.fetchedAt)
+        assertEquals(written, snap.codex.fetchedAt)
+        assertTrue("recent data must not look stale after an upgrade",
+            !WidgetRenderer.isStale(snap.claude))
+    }
+
+    /** A provider's own timestamp still wins when the snapshot carries one. */
+    @Test
+    fun `a per-provider time overrides the snapshot time`() {
+        val ctx = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        signIn(ctx)
+        val now = System.currentTimeMillis()
+        Prefs.setSnapshot(ctx, """
+            {"claude":{"w":[{"l":"5h","p":68,"r":0}],"e":"","plan":"","t":${now - 3 * 3_600_000}},
+             "codex":{"w":[{"l":"7d","p":22,"r":0}],"e":"","plan":"plus","t":$now},
+             "fetchedAt":$now}
+        """.trimIndent())
+        val snap = UsageRepo.load(ctx)
+        assertTrue("the provider that went quiet is stale", WidgetRenderer.isStale(snap.claude))
+        assertTrue("its healthy sibling is not", !WidgetRenderer.isStale(snap.codex))
     }
 
     @Test

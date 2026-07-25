@@ -41,7 +41,14 @@ object Notifier {
             ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED
 
-    /** Called after every successful fetch. Safe to call when disabled or unpermitted. */
+    /**
+     * Called after every successful fetch. Safe to call when disabled or unpermitted.
+     *
+     * Synchronized because a manual refresh and the periodic worker can reach this at
+     * once: it is a read-modify-write of the fired-alert set, and a lost update either
+     * re-announces a window or silences the next real crossing.
+     */
+    @Synchronized
     fun check(ctx: Context, snap: Snapshot) {
         if (!Settings.notifyEnabled(ctx) || !canPost(ctx)) return
         val threshold = Settings.notifyThreshold(ctx)
@@ -62,7 +69,17 @@ object Notifier {
             if (cut <= 0) return false
             if (stored.substring(0, cut) != "$name|${w.label}") return false
             val storedReset = stored.substring(cut + 1).toLongOrNull() ?: return false
-            return kotlin.math.abs(storedReset - w.resetsAt) <= 30 * 60_000L
+            // Tolerance is a fraction of the window, not a flat 30 minutes: a flat value
+            // was wider than the short windows Codex can report, so three consecutive
+            // genuinely-new 10-minute periods all looked like the same one and went
+            // unannounced. Falls back to 30 minutes when the span is unknown.
+            val span = w.lengthMs
+            val tolerance = if (span != null && span > 0L) {
+                (span / 4).coerceIn(60_000L, 30 * 60_000L)
+            } else {
+                30 * 60_000L
+            }
+            return kotlin.math.abs(storedReset - w.resetsAt) <= tolerance
         }
 
         fun scan(name: String, state: ProviderState) {
@@ -70,15 +87,23 @@ object Notifier {
             // Never interrupt someone over numbers that are no longer current. A failed
             // refresh keeps the last good windows, and alerting off those could announce
             // a threshold from hours ago — or one the window has since reset past.
-            if (state.fetchedAt <= 0 || System.currentTimeMillis() - state.fetchedAt > 60 * 60_000L) return
+            // A clock moved backwards leaves a negative age, which would sail past a
+            // "> threshold" test and let stale data alert — the opposite of the intent.
+            val age = System.currentTimeMillis() - state.fetchedAt
+            if (state.fetchedAt <= 0 || age < 0L || age > 60 * 60_000L) return
             reporting += name
             state.windows.forEach { w ->
-                val announced = already.filter { sameWindow(it, name, w) }
+                // With no reset instant there is nothing to distinguish one period from
+                // the next, so the key carries a coarse clock bucket and expires with it
+                // — otherwise one alert per install was all the user would ever get.
+                val keyed = if (w.resetsAt > 0) w else
+                    w.copy(resetsAt = -(System.currentTimeMillis() / (6 * 3600_000L)))
+                val announced = already.filter { sameWindow(it, name, keyed) }
                 // Keep the key we already stored, so its reset value does not creep with
                 // the clock and eventually drift out of tolerance.
-                live += announced.ifEmpty { listOf("$name|${w.label}|${w.resetsAt}") }
+                live += announced.ifEmpty { listOf("$name|${keyed.label}|${keyed.resetsAt}") }
                 if (w.pct >= threshold && announced.isEmpty()) {
-                    fresh += Triple(name, w, w.pct)
+                    fresh += Triple(name, keyed, w.pct)
                 }
             }
         }
@@ -107,7 +132,9 @@ object Notifier {
         }
 
         fresh.forEach { (name, w, pct) ->
-            post(ctx, name, w, pct)
+            // The bucketed key is negative for a reset-less window; the notification
+            // itself must still show the real (absent) reset, so it is restored here.
+            post(ctx, name, if (w.resetsAt < 0) w.copy(resetsAt = 0) else w, pct)
             kept += "$name|${w.label}|${w.resetsAt}"
         }
         Settings.setFiredAlerts(ctx, kept)

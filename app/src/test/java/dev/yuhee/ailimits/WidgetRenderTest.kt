@@ -54,10 +54,13 @@ class WidgetRenderTest {
             Win("Flash", 12, now + 9 * hour, remaining = 8_900_000, unit = "TOKENS"),
         ),
     ) = Snapshot(
-        ProviderState(true, claudeWins, claudeErr),
-        ProviderState(codexConfigured, codexWins, null, "plus"),
+        // Freshly fetched, so the ordinary shots show healthy colours; the staleness
+        // test supplies its own older timestamps. Leaving these at 0 made every single
+        // screenshot render amber, which hides the cue it exists to show.
+        ProviderState(true, claudeWins, claudeErr, null, now - 4 * 60_000),
+        ProviderState(codexConfigured, codexWins, null, "plus", now - 4 * 60_000),
         now - 4 * 60_000,
-        ProviderState(true, geminiWins, null, "free-tier"),
+        ProviderState(true, geminiWins, null, "free-tier", now - 4 * 60_000),
     )
 
     /** Widgets are overwhelmingly seen on a dark home screen, so that is the default. */
@@ -224,6 +227,51 @@ class WidgetRenderTest {
             shoot("stale-${style.name.lowercase()}", style, 264f, 160f, stale, o)
         }
         shoot("stale-detail-tall", WidgetRenderer.Style.DETAIL, 264f, 232f, stale, o)
+    }
+
+    /**
+     * The sizes an adversarial review showed overlapping: each is a size the manifest
+     * actually declares, several of them defaults rather than extremes.
+     */
+    @Test
+    fun declaredMinimumsDoNotOverlap() {
+        dark()
+        val trio = WidgetRenderer.Opts(showGemini = true)
+        // Graph legend used to print straight over its own title here — two providers,
+        // declared minWidth, nothing unusual.
+        shoot("min-graph-250x120", WidgetRenderer.Style.GRAPH, 250f, 120f)
+        shoot("min-graph-140x70", WidgetRenderer.Style.GRAPH, 140f, 70f, o = trio)
+        // Bars had no height adaptation: row 0 sat above the top edge.
+        shoot("min-bars-250x40", WidgetRenderer.Style.BARS, 250f, 40f, o = trio)
+        shoot("min-bars-110x40", WidgetRenderer.Style.BARS, 110f, 40f, o = trio)
+        // Countdown/battery sub-lines and ring captions collided across columns.
+        shoot("min-countdown-250x100", WidgetRenderer.Style.COUNTDOWN, 250f, 100f, o = trio)
+        shoot("min-battery-180x110", WidgetRenderer.Style.BATTERY, 180f, 110f, o = trio)
+        shoot("min-rings-100x88", WidgetRenderer.Style.RINGS, 100f, 88f, o = trio)
+        shoot("min-ticker-90x60", WidgetRenderer.Style.TICKER, 90f, 60f, o = trio)
+        // Detail: compact columns, the solo hero at the declared 48dp floor, and the
+        // height where the footer used to be drawn over the last block.
+        shoot("min-detail-120x48", WidgetRenderer.Style.DETAIL, 120f, 48f, o = trio)
+        shoot("min-detail-180x180", WidgetRenderer.Style.DETAIL, 180f, 180f, o = trio)
+        shoot("min-solo-120x48", WidgetRenderer.Style.DETAIL, 120f, 48f,
+            o = WidgetRenderer.Opts(showCodex = false))
+    }
+
+    /** The bitmap budget must hold even at sizes the launcher can impose below API 31. */
+    @Test
+    fun oversizedWidgetStaysInsideTheBudget() {
+        for ((w, h) in listOf(1000 to 600, 1200 to 800, 2000 to 1200)) {
+            val (pxW, pxH) = WidgetRenderer.bitmapSize(3f, w.toFloat(), h.toFloat())
+            assertTrue(
+                "${w}x$h -> ${pxW}x$pxH = ${pxW * pxH}px, over budget",
+                pxW.toLong() * pxH <= WidgetRenderer.PIXEL_BUDGET.toLong() + 1,
+            )
+        }
+        // And the declared maxima, where independent rounding used to overshoot.
+        for ((w, h) in listOf(640 to 480, 640 to 300, 640 to 200)) {
+            val (pxW, pxH) = WidgetRenderer.bitmapSize(3f, w.toFloat(), h.toFloat())
+            assertTrue("${w}x$h overshoots", pxW.toLong() * pxH <= WidgetRenderer.PIXEL_BUDGET.toLong() + 1)
+        }
     }
 
     @Test

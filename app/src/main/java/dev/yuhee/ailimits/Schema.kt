@@ -56,7 +56,8 @@ object Schema {
         if (NAME.matches(segment)) segment else "<redacted>"
 
     private fun walk(node: Any?, prefix: String, out: Acc, depth: Int) {
-        if (depth > 5) return
+        // A silent depth cut is the same defect the truncation flag exists to prevent.
+        if (depth > 5) { out.truncated = true; return }
         if (out.full) { out.truncated = true; return }
         when (node) {
             is JSONObject -> {

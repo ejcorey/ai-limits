@@ -236,14 +236,13 @@ object WidgetRenderer {
         o: Opts = Opts(),
     ): Pair<Bitmap, Boolean> {
         val t = theme ?: Theme(Settings.themedContext(ctx))
-        val scale = scaleFor(ctx, wDp, hDp)
-        val bmp = Bitmap.createBitmap(
-            max(1, (wDp * scale).roundToInt()),
-            max(1, (hDp * scale).roundToInt()),
-            Bitmap.Config.ARGB_8888,
-        )
+        val density = ctx.resources.displayMetrics.density
+        val (pxW, pxH) = bitmapSize(density, wDp, hDp)
+        val bmp = Bitmap.createBitmap(pxW, pxH, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
-        canvas.scale(scale, scale)
+        // Scale from the pixels actually allocated, so a clamped bitmap still maps the
+        // full dp canvas rather than cropping it.
+        canvas.scale(pxW / wDp.coerceAtLeast(1f), pxH / hDp.coerceAtLeast(1f))
         val pen = Pen(canvas, t)
 
         var footer = false
@@ -314,9 +313,29 @@ object WidgetRenderer {
     internal fun scaleFor(density: Float, wDp: Float, hDp: Float): Float {
         val area = (wDp * hDp).coerceAtLeast(1f)
         val fits = sqrt(PIXEL_BUDGET / area)
-        // Never below 1.0 — a dp-for-pixel bitmap is soft but still legible, and going
-        // finer than that would make a huge widget unreadable to save memory nobody needs.
-        return min(density.coerceIn(1.5f, 3f), fits).coerceAtLeast(1f)
+        // No 1.0 floor. It looked like a legibility guarantee but was really an escape
+        // hatch: past 400,000 dp² the floor won and the bitmap grew unbounded with the
+        // widget. maxResizeWidth/Height are API 31, so on API 26-30 the launcher may hand
+        // out any size at all, and a 1000x600dp widget allocated 2.3 MB.
+        return min(density.coerceIn(1.5f, 3f), fits).coerceAtLeast(0.5f)
+    }
+
+    /**
+     * Bitmap pixel dimensions for a widget, clamped so the product honours the budget.
+     * Rounding each axis independently could overshoot it by a few hundred pixels, and
+     * a scale that has bottomed out cannot be relied on to hold the product down.
+     */
+    internal fun bitmapSize(density: Float, wDp: Float, hDp: Float): Pair<Int, Int> {
+        val scale = scaleFor(density, wDp, hDp)
+        var w = max(1, (wDp * scale).roundToInt())
+        var h = max(1, (hDp * scale).roundToInt())
+        val over = (w.toFloat() * h) / PIXEL_BUDGET
+        if (over > 1f) {
+            val shrink = sqrt(1f / over)
+            w = max(1, (w * shrink).toInt())
+            h = max(1, (h * shrink).toInt())
+        }
+        return w to h
     }
 
     private fun scaleFor(ctx: Context, wDp: Float, hDp: Float): Float =
@@ -367,11 +386,13 @@ object WidgetRenderer {
         // dragged tall should show more, not the same thing with a gap. Every FULL/RICH
         // block can absorb surplus — into a stats line, then a taller sparkline — so the
         // gap is kept tight and the slack flows into the blocks instead of between them.
-        var free = slack - if (foot) FOOT else 0f
+        // Reserving the footer only in `free` let the max() floor below hand the space
+        // back, so the refresh icon could be drawn over the last block's meta line.
+        var free = max(0f, slack - if (foot) FOOT else 0f)
         val canStretch = tier == RICH || tier == FULL
         val gap = min(20f, max(MIN_GAP, free / max(1, n + 1)))
-        free -= gap * (n - 1)
-        val stretch = if (canStretch) min(96f, max(0f, free / n)) else 0f
+        free = max(0f, free - gap * (n - 1))
+        val stretch = if (canStretch) min(96f, max(0f, free / max(1, n))) else 0f
         val bhEff = bh + stretch
         val used = bhEff * n + gap * (n - 1)
         val y = pad + max(0f, (h - pad * 2 - (if (foot) FOOT else 0f) - used) / 2f)
@@ -428,7 +449,7 @@ object WidgetRenderer {
         var cx = x + 13f
         cx += g.text(p.name, cx, pad + 10.5f, 13f, 700, nameColor(p.state, p.color, t), tracking = .035f) + 7f
         val plan = if (p.state.configured) prettyPlan(p.state.plan) else null
-        if (plan != null) cx += g.chip(plan, cx, pad - 1f, p.color) + 7f
+        if (plan != null && cx + g.chipWidth(plan) <= x + cw) cx += g.chip(plan, cx, pad - 1f, p.color) + 7f
 
         if (b == null) {
             g.text(noWindowMsg(p), x, pad + 42f, 14f, 500, if (p.state.error != null) t.warn else t.dim)
@@ -449,9 +470,11 @@ object WidgetRenderer {
 
         // Hero, sized up now that it is not sharing the widget — but kept modest on
         // short widgets so the window rows still get a look in.
+        // Sized against the card, not a single threshold: at the declared 48dp minimum
+        // the fixed hero put its own baseline below the bottom edge.
         val tight = h < 140f
         val hy = pad + if (tight) 15f else 20f
-        val heroSize = if (tight) 33f else 42f
+        val heroSize = min(if (tight) 33f else 42f, max(15f, (h - hy - pad) * 0.55f))
         val heroBase = hy + heroSize * .77f
         // "USED" eyebrow, inline left of the number, so the headline reads "USED 68%".
         val ew = g.text("USED", x, heroBase - heroSize * .30f, 10.5f, 700, t.dim, tracking = .06f)
@@ -530,7 +553,8 @@ object WidgetRenderer {
         var cx = x + 13f
         cx += g.text(name, cx, y + 11f, 13f, 700, nameColor(st, color, t), tracking = .035f) + 7f
         val plan = if (st.configured) prettyPlan(st.plan) else null
-        if (plan != null) cx += g.chip(plan, cx, y - 0.5f, color) + 7f
+        // A chip drawn past the card edge is worse than no chip.
+        if (plan != null && cx + g.chipWidth(plan) <= x + w) cx += g.chip(plan, cx, y - 0.5f, color) + 7f
 
         if (b == null) {
             g.text(noWindowMsg(p), x, y + if (med) 34f else 42f, if (med) 12.5f else 13.5f, 500,
@@ -662,6 +686,9 @@ object WidgetRenderer {
         val gap = 18f
         val n = max(1, panels.size)
         val colW = (w - pad * 2 - gap * (n - 1)) / n
+        // Under this the percentage no longer fits its column, and suppressing it left
+        // only dots and bars — a widget with no numbers on it. Dense fits the figures.
+        if (colW < 34f) { drawDense(g, w, h, panels, t); return }
         // Below this there is no room for a name and a number on the same line.
         val roomy = colW >= 96f
         val single = h >= 60f
@@ -682,7 +709,8 @@ object WidgetRenderer {
             } else {
                 // Too narrow for both: the number is what matters, keep only a colour cue.
                 g.circle(x + 4f, cy - 10f, 3.5f, dotColor(p.state, p.color, t))
-                g.text(if (b != null) "${b.pct}%" else "--", x + colW, cy - 6f, 14f, 700, sc, Paint.Align.RIGHT)
+                g.fitText(if (b != null) "${b.pct}%" else "--", x + colW, cy - 6f, 14f, 700, sc,
+                    colW - 10f, Paint.Align.RIGHT)
             }
             g.bar(x, cy, colW, 9f, b?.pct ?: 0, sc)
             if (single) {
@@ -694,7 +722,7 @@ object WidgetRenderer {
                     !p.state.configured -> "tap to sign in"
                     else -> "no data yet"
                 }
-                g.text(sub, x, cy + 20f, 10f, 500, t.faint)
+                g.fitText(sub, x, cy + 20f, 10f, 500, t.faint, colW)
             }
         }
     }
@@ -740,8 +768,14 @@ object WidgetRenderer {
         val n = max(1, panels.size)
         // Squeezed short, the caption is the first thing to go — a clipped label
         // below the dial is worse than no label at all.
-        val showLabel = h >= 88f
-        val showSub = h >= 104f
+        // Decided across all the rings, not per ring: the per-column fit check kept
+        // whichever caption happened to fit and dropped its neighbours, which reads as
+        // a glitch rather than as a deliberate simplification.
+        val captionsFit = panels.all {
+            g.measure(it.name.uppercase(), 10.5f, 700, .05f) <= w / n - 8f
+        }
+        val showLabel = h >= 88f && captionsFit
+        val showSub = h >= 104f && captionsFit
         val bottom = if (showSub) 30f else if (showLabel) 17f else 0f
         // One ring gets the whole card, so it can be much larger.
         val r = min((w / n - 30f) / 2f, (h - bottom - 14f) / 2f).coerceAtLeast(10f)
@@ -770,14 +804,18 @@ object WidgetRenderer {
             }
             g.text(label, cx - off, cy + ns * .34f, ns, 700, c, tracking = -.017f)
             if (b != null) g.text("%", cx - off + nw + 1.5f, cy + ns * .34f, r * .26f, 700, c)
-            if (showLabel) g.text(name, cx, cy + r + 13f, 10.5f, 700, t.dim, Paint.Align.CENTER, .05f)
+            // Rings had no staleness cue at all; the caption carries it, as in Battery.
+            if (showLabel) {
+                g.fitText(name, cx, cy + r + 13f, 10.5f, 700, nameColor(st, color, t),
+                    w / n - 8f, Paint.Align.CENTER, .05f)
+            }
             if (showSub) {
                 val sub = when {
                     b != null -> left(b.resetsAt) + " left"
                     !p.state.configured -> "tap to sign in"
                     else -> "no data yet"
                 }
-                g.text(sub, cx, cy + r + 26f, 10f, 500, t.faint, Paint.Align.CENTER)
+                g.fitText(sub, cx, cy + r + 26f, 10f, 500, t.faint, w / n - 8f, Paint.Align.CENTER)
             }
         }
     }
@@ -789,8 +827,10 @@ object WidgetRenderer {
         val pad = 14f
         val cw = w - pad * 2
         val panels = visible(snap, hist = emptyList(), t = t, o = o)
-        val rowH = 26f
-        val top = h / 2f - rowH * panels.size / 2f + 1f
+        // Rows are sized from the height actually available. A fixed pitch put the first
+        // row above the top edge at the declared 40dp minimum with three providers.
+        val rowH = ((h - 8f) / panels.size).coerceIn(13f, 26f)
+        val top = max(3f, h / 2f - rowH * panels.size / 2f) + (rowH - 26f) / 2f
 
         // Columns are budgeted from the width actually available rather than fixed
         // offsets, which used to go negative and push text past the right edge.
@@ -809,8 +849,9 @@ object WidgetRenderer {
             val sc = if (b != null) t.status(b.pct, p.color) else t.faint
             g.circle(pad + 3.5f, y + 6.5f, 3.4f, dotColor(p.state, p.color, t))
             if (showName) {
-                g.text(p.name, pad + 12f, y + 11f, 11f, 700,
-                    nameColor(p.state, p.color, t), tracking = .03f)
+                // Bounded by where the bar starts, not merely by the column reservation.
+                g.fitText(p.name, pad + 12f, y + 11f, 11f, 700,
+                    nameColor(p.state, p.color, t), barX - pad - 16f, tracking = .03f)
             }
             g.bar(barX, y + 4f, barW, 9f, b?.pct ?: 0, sc)
             val numRight = barX + barW + pctW
@@ -855,9 +896,10 @@ object WidgetRenderer {
             Seg(value, if (b != null) t.status(b.pct, p.color) else t.faint, p.state, p.color)
         }
 
+        var shownCount = segs.size
         fun layout(size: Float, gap: Float, dot: Float): Float =
-            segs.sumOf { (g.measure(it.pct, size, 700) + dot * 2 + 3f).toDouble() }.toFloat() +
-                gap * (segs.size - 1)
+            segs.take(shownCount).sumOf { (g.measure(it.pct, size, 700) + dot * 2 + 3f).toDouble() }
+                .toFloat() + gap * (shownCount - 1)
 
         // Shrink, then tighten the gap, before giving up and using the smallest.
         var size = 13f
@@ -869,9 +911,13 @@ object WidgetRenderer {
             dot = max(1.8f, dot - .12f)
         }
 
+        // The loop above gives up at its floor whether or not the result fits, so the
+        // last resort is dropping segments rather than painting past both edges.
+        while (shownCount > 1 && layout(size, gap, dot) > w - 6f) shownCount--
+        val segs2 = segs.take(shownCount)
         var x = (w - layout(size, gap, dot)) / 2f
         val baseY = h / 2f + size * .36f
-        segs.forEach { sg ->
+        segs2.forEach { sg ->
             g.circle(x + dot, baseY - size * .32f, dot, dotColor(sg.state, sg.base, t))
             x += dot * 2 + 3f
             x += g.text(sg.pct, x, baseY, size, 700, sg.color) + gap
@@ -892,7 +938,12 @@ object WidgetRenderer {
         val showReset = h >= 100f
         val bodyH = min(34f, h * .36f).coerceAtLeast(18f)
         // Clamped to the column, never merely coerced up past it.
-        val bodyW = min(colW - 12f, bodyH * 2.3f).coerceIn(28f, colW - 10f)
+        // coerceIn throws when its bounds invert, so the upper bound is floored rather
+        // than trusted: it is derived from the column width, and the only thing keeping
+        // it above the lower bound today is the bail-out above. A blank widget from an
+        // IllegalArgumentException is not a failure mode worth leaving to a constant.
+        val maxBody = max(28f, colW - 10f)
+        val bodyW = min(colW - 12f, bodyH * 2.3f).coerceAtLeast(28f).coerceAtMost(maxBody)
         val block = bodyH + (if (showName) 17f else 0f) + (if (showReset) 14f else 0f)
         val topY = (h - block) / 2f
 
@@ -938,7 +989,7 @@ object WidgetRenderer {
                     tokens != null && g.measure(tokens, 9.5f, 500) <= colW - 8f -> tokens
                     else -> "resets " + left(b.resetsAt)
                 }
-                g.text(sub, cx, topY + bodyH + 28f, 9.5f, 500, t.faint, Paint.Align.CENTER)
+                g.fitText(sub, cx, topY + bodyH + 28f, 9.5f, 500, t.faint, colW - 6f, Paint.Align.CENTER)
             }
         }
     }
@@ -1009,7 +1060,12 @@ object WidgetRenderer {
                 if (urgent) t.warn else t.text, Paint.Align.CENTER, -.01f)
             y += big + 5f
             if (showSub) {
-                g.text("${b.pct}% · " + shortWindow(b.label), cx, y + 9f, 10f, 500, t.dim, Paint.Align.CENTER)
+                // Was drawn unmeasured and collided with the next column at the
+                // declared minimum width; the shorter form is tried before giving up.
+                val full = "${b.pct}% · " + shortWindow(b.label)
+                if (g.fitText(full, cx, y + 9f, 10f, 500, t.dim, colW - 8f, Paint.Align.CENTER) == 0f) {
+                    g.fitText("${b.pct}%", cx, y + 9f, 10f, 500, t.dim, colW - 8f, Paint.Align.CENTER)
+                }
                 y += 15f
             }
             // Elapsed-through-the-window bar, only when the label tells us its length.
@@ -1089,10 +1145,11 @@ object WidgetRenderer {
                 binding(p.state)?.takeIf { it.resetsAt > 0 }?.let { p.name to it }
             }.minByOrNull { it.second.resetsAt }
             if (next != null) {
-                g.text(
-                    "next reset " + left(next.second.resetsAt) + " · " + next.first,
-                    w / 2f, y1 + 18f, 9.5f, 500, t.faint, Paint.Align.CENTER
-                )
+                val full = "next reset " + left(next.second.resetsAt) + " · " + next.first
+                if (g.fitText(full, w / 2f, y1 + 18f, 9.5f, 500, t.faint, w - 12f, Paint.Align.CENTER) == 0f) {
+                    g.fitText("next " + left(next.second.resetsAt), w / 2f, y1 + 18f, 9.5f, 500,
+                        t.faint, w - 12f, Paint.Align.CENTER)
+                }
             }
         }
     }
@@ -1122,13 +1179,31 @@ object WidgetRenderer {
         val t0 = now - span
 
         if (showHeader) {
-            g.text("Last 24 hours · USED %", padL, 18f, 11.5f, 700, t.text, tracking = .03f)
+            // The legend identifies the lines; the title merely names the chart. When
+            // they compete for the row the title gives way first, and only then does the
+            // legend start shortening. Dropping a legend entry leaves a line unlabelled.
+            val legendW = panels.sumOf { p ->
+                val b = binding(p.state)
+                val s2 = if (b != null) "${p.name} ${b.pct}%" else p.name
+                (g.measure(s2, 10.5f, 600, .02f) + 19f).toDouble()
+            }.toFloat()
+            val room = w - padL - padR - legendW - 12f
+            val title = listOf("Last 24 hours · USED %", "Last 24 hours", "24h", "")
+                .first { it.isEmpty() || g.measure(it, 11.5f, 700, .03f) <= room }
+            val titleW = if (title.isEmpty()) 0f else
+                g.text(title, padL, 18f, 11.5f, 700, t.text, tracking = .03f)
             var lx = w - padR
+            // The legend used to walk leftward unchecked and print straight over the
+            // title at the declared minimum width with the default two providers.
+            val floorX = padL + titleW + 12f
             panels.reversed().forEach { p ->
                 val b = binding(p.state)
-                val c = p.color
-                val s = if (b != null) "${p.name} ${b.pct}%" else p.name
+                val c = dotColor(p.state, p.color, t)
+                val full = if (b != null) "${p.name} ${b.pct}%" else p.name
+                val short = if (b != null) "${b.pct}%" else p.name
+                val s = if (g.measure(full, 10.5f, 600, .02f) + 11f <= lx - floorX) full else short
                 val tw = g.measure(s, 10.5f, 600, .02f)
+                if (lx - tw - 11f < floorX) return@forEach
                 g.text(s, lx, 18f, 10.5f, 600, c, Paint.Align.RIGHT, .02f)
                 g.circle(lx - tw - 8f, 14f, 2.8f, c)
                 lx -= tw + 19f
@@ -1187,9 +1262,18 @@ object WidgetRenderer {
      * are doing. A failed refresh keeps the last good windows, so without this a revoked
      * token looked identical to healthy data.
      */
-    internal fun isStale(st: ProviderState, now: Long = System.currentTimeMillis()): Boolean =
-        st.configured && st.windows.isNotEmpty() &&
-            (st.fetchedAt <= 0L || now - st.fetchedAt > 60 * 60_000L)
+    internal fun isStale(
+        st: ProviderState,
+        now: Long = System.currentTimeMillis(),
+        staleAfterMs: Long = 60 * 60_000L,
+    ): Boolean {
+        if (!st.configured || st.windows.isEmpty()) return false
+        if (st.fetchedAt <= 0L) return true
+        val age = now - st.fetchedAt
+        // A negative age means the clock moved back, not that the data is fresh; a
+        // "> threshold" test alone would have called arbitrarily old data current.
+        return age < 0L || age > staleAfterMs
+    }
 
     /**
      * Colour for a provider's identity dot. Amber means "these numbers are old" — the
@@ -1197,7 +1281,7 @@ object WidgetRenderer {
      */
     private fun dotColor(st: ProviderState, color: Int, t: Theme): Int = when {
         !st.configured -> t.faint
-        isStale(st) -> t.warn
+        isStale(st, staleAfterMs = t.staleAfterMs) -> t.warn
         else -> color
     }
 
@@ -1208,7 +1292,7 @@ object WidgetRenderer {
      */
     private fun nameColor(st: ProviderState, color: Int, t: Theme): Int = when {
         !st.configured -> t.dim
-        isStale(st) -> t.warn
+        isStale(st, staleAfterMs = t.staleAfterMs) -> t.warn
         else -> color
     }
 
@@ -1449,6 +1533,12 @@ object WidgetRenderer {
     // --- theme ------------------------------------------------------------
 
     internal class Theme(ctx: Context) {
+        /**
+         * How old data must be before it is called stale. Derived from the user's own
+         * refresh interval: a flat hour meant the two-hour setting showed amber for most
+         * of every cycle even when every single fetch had succeeded.
+         */
+        val staleAfterMs: Long = max(60L * 60_000L, Prefs.refreshMinutes(ctx) * 60_000L * 2L)
         val bg = ctx.getColor(R.color.widget_bg)
         val stroke = ctx.getColor(R.color.widget_stroke)
         val text = ctx.getColor(R.color.text)
@@ -1496,6 +1586,25 @@ object WidgetRenderer {
             p.letterSpacing = tracking
             c.drawText(s, x, y, p)
             return p.measureText(s)
+        }
+
+        /**
+         * Draws only if it fits, stepping the size down first and giving up rather than
+         * spilling into a neighbour. Most overlap in this file came from text drawn with
+         * no measurement at all, so the guard lives in one place instead of at each site.
+         *
+         * @return the width drawn, or 0 when nothing was.
+         */
+        fun fitText(
+            s: String, x: Float, y: Float, size: Float, weight: Int, color: Int,
+            maxW: Float, align: Paint.Align = Paint.Align.LEFT, tracking: Float = 0f,
+            minSize: Float = size - 3f,
+        ): Float {
+            if (maxW <= 1f) return 0f
+            var sz = size
+            while (sz > minSize && measure(s, sz, weight, tracking) > maxW) sz -= .5f
+            if (measure(s, sz, weight, tracking) > maxW) return 0f
+            return text(s, x, y, sz, weight, color, align, tracking)
         }
 
         fun measure(s: String, size: Float, weight: Int, tracking: Float = 0f): Float {
@@ -1550,6 +1659,8 @@ object WidgetRenderer {
             rrect(x, y, fw, h, h / 2f, color,
                 LinearGradient(x, 0f, x + fw, 0f, blend(color, Color.WHITE, .24f), color, Shader.TileMode.CLAMP))
         }
+
+        fun chipWidth(s: String): Float = measure(s, 9f, 700, .035f) + 10f
 
         fun chip(s: String, x: Float, y: Float, color: Int?): Float {
             val h = 12.5f
