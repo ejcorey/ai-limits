@@ -95,7 +95,8 @@ object Prefs {
     fun clearGemini(ctx: Context) {
         p(ctx).edit().remove("gm_access").remove("gm_refresh").remove("gm_exp")
             .remove("gm_verifier").remove("gm_state").remove("gm_pending")
-            .remove("gm_project").remove("gm_tier").remove("keys_gemini").apply()
+            .remove("gm_project").remove("gm_tier").remove("keys_gemini")
+            .remove("gm_buckets").apply()
     }
 
     // PKCE in-flight state (survives process death while browser is open)
@@ -135,6 +136,16 @@ object Prefs {
         p(ctx).edit()
             .putString("keys_$provider", if (keys.length <= 600) keys else keys.take(597) + "…")
             .apply()
+
+    /**
+     * Raw Gemini bucket values from the last fetch (model id, remaining fraction and
+     * amount). Usage figures, not credentials — kept so a wrong percentage on the home
+     * screen can be traced to the bucket that produced it.
+     */
+    fun geminiBuckets(ctx: Context): String? = p(ctx).getString("gm_buckets", null)
+
+    fun setGeminiBuckets(ctx: Context, summary: String) =
+        p(ctx).edit().putString("gm_buckets", summary.take(500)).apply()
 
     // --- Last usage snapshot (JSON) ---
     fun snapshot(ctx: Context): String? = p(ctx).getString("snapshot", null)

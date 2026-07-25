@@ -227,6 +227,9 @@ object GeminiApi {
         }
         if (r.code !in 200..299) throw RuntimeException("Gemini usage failed (HTTP ${r.code})")
         Schema.record(ctx, "gemini", r.body)
+        // Kept so a wrong number on the home screen can be traced to the raw bucket
+        // that produced it, instead of reasoned about from a screenshot.
+        runCatching { Prefs.setGeminiBuckets(ctx, bucketSummary(r.body)) }
         return parseQuota(r.body) to prettyTier(tier)
     }
 
@@ -234,43 +237,109 @@ object GeminiApi {
      * Buckets arrive per model id, sometimes several per family; the widget wants one
      * window per family showing the fullest bucket (that is the binding one).
      */
+    /**
+     * One window per model bucket.
+     *
+     * Two rules are taken straight from Gemini CLI rather than invented here, because
+     * inventing them produced a widget that read "0% left" for an account with most of
+     * its quota intact:
+     *
+     *  - A bucket whose limit cannot be derived is dropped. `remainingFraction == 0`
+     *    with no `remainingAmount` cannot distinguish "you have used it all" from "this
+     *    model has no quota on your tier", and the CLI refuses to record it
+     *    (`limit > 0` guard). Reporting it as 100% used was a guess, and the wrong one:
+     *    a single placeholder bucket made the whole provider look exhausted.
+     *  - Buckets are kept per model id. They were previously collapsed into families
+     *    ("Pro", "Flash") keeping the FULLEST, so one spent sibling poisoned the family.
+     *    Model quotas are separate limits and are now shown separately.
+     */
     internal fun parseQuota(body: String): List<Win> {
         val j = JSONObject(body)
         val buckets = j.optJSONArray("buckets") ?: JSONArray()
-        val byLabel = LinkedHashMap<String, Win>()
+        val out = mutableListOf<Win>()
+        val used = mutableSetOf<String>()
+        var sawBucket = false
+
         for (i in 0 until buckets.length()) {
             val o = buckets.optJSONObject(i) ?: continue
             val frac = o.optDouble("remainingFraction", Double.NaN)
             if (frac.isNaN()) continue
-            val pct = ((1 - frac) * 100).roundToInt().coerceIn(0, 100)
-            val reset = parseIso(o.optString("resetTime", ""))
-            val label = modelLabel(o.optString("modelId", ""))
+            sawBucket = true
+
             // remainingAmount is a numeric string (Gemini CLI parseInt's it the same way).
-            // An absent or non-numeric value simply means no count to show.
             val remaining = o.optString("remainingAmount", "").trim()
                 .takeIf { it.isNotEmpty() }?.toLongOrNull()?.takeIf { it >= 0 }
+            // Nothing left AND no count to prove it is a bucket we cannot interpret.
+            if (frac <= 0.0 && remaining == null) continue
+
+            val pct = ((1 - frac.coerceIn(0.0, 1.0)) * 100).roundToInt().coerceIn(0, 100)
+            val reset = parseIso(o.optString("resetTime", ""))
             val unit = o.optString("tokenType", "").trim().ifEmpty { null }
-            val prev = byLabel[label]
-            if (prev == null || pct > prev.pct) {
-                byLabel[label] = Win(label, pct, reset, remaining, unit)
+
+            // Labels key the per-window hide toggles and the alert de-dup, so they have
+            // to be unique even if two model ids shorten to the same thing.
+            var label = modelLabel(o.optString("modelId", ""))
+            if (!used.add(label)) {
+                var n = 2
+                while (!used.add("$label $n")) n++
+                label = "$label $n"
             }
+            out.add(Win(label, pct, reset, remaining, unit))
         }
+
         // A recognised-but-empty answer must fail so the previous snapshot survives —
-        // same rule as the other providers.
-        if (byLabel.isEmpty()) throw RuntimeException("Unrecognized usage response")
-        return byLabel.values.toList()
+        // same rule as the other providers. "Every bucket was uninterpretable" is a
+        // different thing from "the shape changed", and says so.
+        if (out.isEmpty()) {
+            throw RuntimeException(
+                if (sawBucket) "No usable Gemini quota reported" else "Unrecognized usage response"
+            )
+        }
+        return out
+    }
+
+    /**
+     * A compact, values-included summary of the raw buckets, for diagnostics. Model ids
+     * and usage fractions are not credentials, and having them is the difference between
+     * diagnosing a wrong number and guessing at it.
+     */
+    internal fun bucketSummary(body: String): String = try {
+        val buckets = JSONObject(body).optJSONArray("buckets") ?: JSONArray()
+        (0 until buckets.length()).mapNotNull { i ->
+            val o = buckets.optJSONObject(i) ?: return@mapNotNull null
+            val id = o.optString("modelId", "?")
+            val frac = o.optDouble("remainingFraction", Double.NaN)
+            val amt = o.optString("remainingAmount", "")
+            buildString {
+                append(id).append(" frac=")
+                append(if (frac.isNaN()) "-" else String.format(java.util.Locale.US, "%.3f", frac))
+                if (amt.isNotEmpty()) append(" amt=").append(amt)
+            }
+        }.joinToString("; ").ifEmpty { "no buckets" }
+    } catch (_: Exception) {
+        "unparseable"
     }
 
     /** "gemini-3-pro-preview" -> "Pro", "gemini-2.5-flash-lite" -> "Flash Lite". */
+    /**
+     * "gemini-3-pro-preview" -> "3 Pro", "gemini-2.5-flash-lite" -> "2.5 Flash Lite".
+     * Keeps the version, because two generations of Pro are two different quotas and
+     * collapsing them to one name is what hid a real number behind a spent one.
+     */
     internal fun modelLabel(id: String): String {
-        val k = id.lowercase()
-        return when {
-            k.contains("flash") && k.contains("lite") -> "Flash Lite"
-            k.contains("flash") -> "Flash"
-            k.contains("pro") -> "Pro"
-            k.isEmpty() -> "daily"
-            else -> id.removePrefix("gemini-").take(12)
-        }
+        val cleaned = id.lowercase()
+            .removePrefix("models/")
+            .removePrefix("gemini-")
+            .replace(Regex("-(preview|latest|exp|experimental)(-[0-9]{2,})?$"), "")
+            .trim('-')
+        if (cleaned.isEmpty()) return "daily"
+        val label = cleaned.split('-', '_')
+            .filter { it.isNotEmpty() }
+            .joinToString(" ") { part ->
+                // Version numbers stay as digits; words get a capital.
+                if (part.first().isDigit()) part else part.replaceFirstChar { it.uppercase() }
+            }
+        return if (label.length <= 16) label else label.take(15) + "…"
     }
 
     internal fun prettyTier(tier: String?): String? = when (tier?.lowercase()) {

@@ -366,6 +366,9 @@ class MainActivity : AppCompatActivity() {
         // Field NAMES only, with anything that does not look like a field name redacted.
         // This is how we learn whether a provider has started publishing counts we could
         // be showing, without reproducing the values themselves.
+        Prefs.geminiBuckets(this)?.let {
+            sb.append("gemini raw buckets: ").append(it).append('\n')
+        }
         sb.append("response fields seen (names only):\n")
         listOf("claude", "codex", "gemini").forEach { k ->
             Prefs.responseKeys(this, k)?.let { sb.append("  ").append(k).append(": ").append(it).append('\n') }

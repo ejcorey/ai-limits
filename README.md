@@ -53,7 +53,7 @@ All of these change the widgets immediately, with a live preview in the app:
 
 - **Claude**: 5-hour window, 7-day window, plus Opus/Sonnet 7-day windows when present.
 - **Codex**: primary (≈5 h) and weekly windows, plus the plan type as a chip.
-- **Gemini** (optional): live per-model quota — % used and reset time per family (Pro, Flash…), plus your tier as a chip. Fetched from the same Cloud Code endpoint Gemini CLI uses.
+- **Gemini** (optional): live per-model quota — one window per model (3 Pro, 2.5 Flash…), each with its own % used and reset, plus your tier as a chip. Fetched from the same Cloud Code endpoint Gemini CLI uses, so it is the pool the CLI draws from and **not** the quota shown in the Gemini app or AI Studio. Buckets whose limit cannot be derived are dropped rather than shown as 100% used.
 - **Aligned across providers**: every bar starts at a shared column and the type is sized for a large phone, so two or three panels read as one even grid. Widgets resize across the full One UI cell range and degrade gracefully when narrow (dropping the least important element rather than clipping).
 - **The binding window** — whichever is fullest — is the headline number, because that is the one that will actually stop you.
 - **"USED" prefixes every headline number**, and a companion "N% left" is shown, so there is no confusion between how much is spent and how much remains.

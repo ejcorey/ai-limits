@@ -130,29 +130,106 @@ class UsageRepoTest {
               {"modelId":"gemini-2.5-flash","remainingFraction":0.88,"resetTime":"2026-07-26T03:00:00Z"}]}
         """.trimIndent()
         val wins = GeminiApi.parseQuota(body)
-        assertEquals(listOf("Pro", "Flash"), wins.map { it.label })
+        // Labels keep the generation: two versions of Pro are two different quotas.
+        assertEquals(listOf("3 Pro", "2.5 Flash"), wins.map { it.label })
         assertEquals(37, wins[0].pct)   // 1 - 0.63 remaining
         assertEquals(12, wins[1].pct)
         assertTrue(wins[0].resetsAt > 0)
     }
 
+    /**
+     * This previously asserted that same-family buckets were merged keeping the emptiest.
+     * That was the defect behind the "Gemini 0% left" report, so the expectation is
+     * inverted: distinct models are distinct limits and each keeps its own figure.
+     */
     @Test
-    fun `duplicate gemini buckets keep the fullest one`() {
+    fun `sibling models are separate windows, not merged into the emptiest`() {
         val body = """
             {"buckets":[
               {"modelId":"gemini-3-pro-preview","remainingFraction":0.9},
               {"modelId":"gemini-3-pro-image","remainingFraction":0.2}]}
         """.trimIndent()
         val wins = GeminiApi.parseQuota(body)
-        assertEquals(1, wins.size)
-        assertEquals("Pro", wins[0].label)
-        assertEquals(80, wins[0].pct)   // the binding bucket wins
+        assertEquals(2, wins.size)
+        assertEquals(10, wins.first { it.label.contains("Pro") && !it.label.contains("Image") }.pct)
+        assertEquals(80, wins.first { it.label.contains("Image") }.pct)
     }
 
     @Test
     fun `an unrecognised gemini response is an error, not an empty success`() {
         assertTrue(runCatching { GeminiApi.parseQuota("""{"something":1}""") }.isFailure)
         assertTrue(runCatching { GeminiApi.parseQuota("""{"buckets":[]}""") }.isFailure)
+    }
+
+    /**
+     * Reported from a real device: the widget showed Gemini at 0% left while most of the
+     * quota was intact. A bucket with nothing left and no count cannot distinguish
+     * "spent" from "this model has no quota on your tier", and collapsing model families
+     * kept the emptiest one — so a single placeholder made the provider look exhausted.
+     */
+    @Test
+    fun `an empty placeholder bucket does not report the account as exhausted`() {
+        val body = """
+            {"buckets":[
+              {"modelId":"gemini-3-pro-image","remainingFraction":0},
+              {"modelId":"gemini-3-pro-preview","remainingFraction":0.6}]}
+        """.trimIndent()
+        val wins = GeminiApi.parseQuota(body)
+        assertEquals("the uninterpretable bucket is dropped", 1, wins.size)
+        assertEquals(40, wins[0].pct)   // 60% remaining
+        assertEquals("3 Pro", wins[0].label)
+    }
+
+    /** A genuinely spent quota still reports, because the server proves it with a count. */
+    @Test
+    fun `a real zero with a count is kept`() {
+        val body = """{"buckets":[{"modelId":"gemini-3-pro","remainingFraction":0,"remainingAmount":"0"}]}"""
+        val wins = GeminiApi.parseQuota(body)
+        assertEquals(1, wins.size)
+        assertEquals(100, wins[0].pct)
+        assertEquals(0L, wins[0].remaining)
+    }
+
+    /** Model families are separate limits and are no longer merged into one. */
+    @Test
+    fun `each model keeps its own window and its own label`() {
+        val body = """
+            {"buckets":[
+              {"modelId":"gemini-3-pro-preview","remainingFraction":0.6},
+              {"modelId":"gemini-2.5-flash","remainingFraction":0.9},
+              {"modelId":"gemini-2.5-flash-lite","remainingFraction":0.95}]}
+        """.trimIndent()
+        val wins = GeminiApi.parseQuota(body)
+        assertEquals(listOf("3 Pro", "2.5 Flash", "2.5 Flash Lite"), wins.map { it.label })
+        // Labels key the hide toggles and the alert de-dup, so they must be distinct.
+        assertEquals(wins.size, wins.map { it.label }.toSet().size)
+    }
+
+    @Test
+    fun `colliding labels are disambiguated rather than dropped`() {
+        val body = """
+            {"buckets":[
+              {"modelId":"gemini-3-pro-preview","remainingFraction":0.6},
+              {"modelId":"gemini-3-pro-latest","remainingFraction":0.4}]}
+        """.trimIndent()
+        val wins = GeminiApi.parseQuota(body)
+        assertEquals(2, wins.size)
+        assertEquals(wins.size, wins.map { it.label }.toSet().size)
+    }
+
+    @Test
+    fun `all-empty buckets fail rather than showing a false zero`() {
+        val body = """{"buckets":[{"modelId":"gemini-3-pro","remainingFraction":0}]}"""
+        assertTrue(runCatching { GeminiApi.parseQuota(body) }.isFailure)
+    }
+
+    @Test
+    fun `raw buckets are summarised for diagnostics`() {
+        val body = """{"buckets":[{"modelId":"gemini-3-pro","remainingFraction":0.63,"remainingAmount":"1240000"}]}"""
+        val sum = GeminiApi.bucketSummary(body)
+        assertTrue(sum, sum.contains("gemini-3-pro"))
+        assertTrue(sum, sum.contains("0.630"))
+        assertTrue(sum, sum.contains("1240000"))
     }
 
     @Test
