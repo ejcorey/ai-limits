@@ -99,19 +99,6 @@ class NotifierTest {
         assertEquals(0, posted())
     }
 
-    @Test
-    fun `gemini windows alert too`() {
-        val snap = Snapshot(
-            ProviderState(false, emptyList(), null),
-            ProviderState(false, emptyList(), null),
-            now,
-            gemini = ProviderState(true, listOf(Win("Pro", 95, now + hour)), null, null, now),
-        )
-        Notifier.check(ctx, snap)
-        assertEquals(1, posted())
-        assertTrue(currentTitle()!!.contains("Gemini"))
-    }
-
     /**
      * A failed refresh keeps the last good windows, so without a freshness gate the app
      * would announce a threshold read hours ago — for a window that has since reset.

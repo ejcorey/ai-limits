@@ -10,15 +10,14 @@ import org.json.JSONObject
  * **Every field is nullable and null means "inherit the app-wide setting".** That is the
  * whole safety property of this class: widgets placed before per-instance config existed
  * have no record at all, and must keep rendering exactly as they did. A version of this
- * with non-null defaults would silently revert every existing widget on update — Gemini
- * switched off, opacity back to 100, hidden windows reappearing — which is the one way
- * this feature can do real damage.
+ * with non-null defaults would silently revert every existing widget on update — a
+ * provider switched off, opacity back to 100, hidden windows reappearing — which is the
+ * one way this feature can do real damage.
  */
 data class WidgetConfig(
     val style: WidgetRenderer.Style? = null,
     val showClaude: Boolean? = null,
     val showCodex: Boolean? = null,
-    val showGemini: Boolean? = null,
     val opacity: Int? = null,
     val projection: Boolean? = null,
     val sparkline: Boolean? = null,
@@ -26,20 +25,18 @@ data class WidgetConfig(
     val pace: Boolean? = null,
     val hiddenClaude: Set<String>? = null,
     val hiddenCodex: Set<String>? = null,
-    val hiddenGemini: Set<String>? = null,
 ) {
     /** True when nothing is overridden, so the record is worth deleting rather than storing. */
     val inheritsEverything: Boolean
-        get() = style == null && showClaude == null && showCodex == null && showGemini == null &&
+        get() = style == null && showClaude == null && showCodex == null &&
             opacity == null && projection == null && sparkline == null && tokens == null &&
-            pace == null && hiddenClaude == null && hiddenCodex == null && hiddenGemini == null
+            pace == null && hiddenClaude == null && hiddenCodex == null
 
     fun toJson(): String {
         val j = JSONObject()
         style?.let { j.put("style", it.name) }
         showClaude?.let { j.put("cl", it) }
         showCodex?.let { j.put("cx", it) }
-        showGemini?.let { j.put("gm", it) }
         opacity?.let { j.put("op", it) }
         projection?.let { j.put("proj", it) }
         sparkline?.let { j.put("spark", it) }
@@ -47,7 +44,6 @@ data class WidgetConfig(
         pace?.let { j.put("pace", it) }
         hiddenClaude?.let { j.put("hcl", JSONArray(it.toList())) }
         hiddenCodex?.let { j.put("hcx", JSONArray(it.toList())) }
-        hiddenGemini?.let { j.put("hgm", JSONArray(it.toList())) }
         return j.toString()
     }
 
@@ -66,7 +62,6 @@ data class WidgetConfig(
                     ?.let { name -> WidgetRenderer.Style.entries.firstOrNull { it.name == name } },
                 showClaude = bool("cl"),
                 showCodex = bool("cx"),
-                showGemini = bool("gm"),
                 opacity = if (j.has("op")) j.optInt("op").coerceIn(40, 100) else null,
                 projection = bool("proj"),
                 sparkline = bool("spark"),
@@ -74,7 +69,6 @@ data class WidgetConfig(
                 pace = bool("pace"),
                 hiddenClaude = strings("hcl"),
                 hiddenCodex = strings("hcx"),
-                hiddenGemini = strings("hgm"),
             )
         } catch (_: Exception) {
             // A record we cannot read must not take the widget down with it.

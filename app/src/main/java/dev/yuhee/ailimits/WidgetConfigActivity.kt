@@ -151,9 +151,6 @@ class WidgetConfigActivity : AppCompatActivity() {
         col.addView(check("Codex", draft.showCodex ?: global.showCodex) {
             draft = draft.copy(showCodex = it); afterProviderChange()
         })
-        col.addView(check("Gemini", draft.showGemini ?: global.showGemini) {
-            draft = draft.copy(showGemini = it); afterProviderChange()
-        })
 
         // --- windows
         windowBoxes = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -248,13 +245,36 @@ class WidgetConfigActivity : AppCompatActivity() {
         val provs = listOf(
             P("Claude", "cl", snap.claude, opts.showClaude),
             P("Codex", "cx", snap.codex, opts.showCodex),
-            P("Gemini", "gm", snap.gemini, opts.showGemini),
         )
-        var any = false
+        // The heading is unconditional. Hiding the whole section whenever there was nothing
+        // to tick made the feature invisible: a user who has not signed in, or whose first
+        // fetch has not landed, saw no sign that choosing between the 5-hour and the weekly
+        // limit was possible at all.
+        windowBoxes.addView(heading("Limit windows"))
+        windowBoxes.addView(TextView(this).apply {
+            text = "Show the 5-hour limit, the weekly one, or both — per provider, for this widget."
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            alpha = .55f
+            setPadding(0, 0, 0, dp(2f))
+        })
+
+        fun note(s: String) = windowBoxes.addView(TextView(this).apply {
+            text = s
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            alpha = .55f
+            setPadding(0, dp(8f), 0, 0)
+        })
+
+        val visible = provs.filter { it.shown }
+        if (visible.none { it.state.configured }) {
+            note("Sign in to a provider and refresh once — its windows appear here.")
+        } else if (visible.none { it.state.windows.size >= 2 }) {
+            note("Only one window is being reported right now, so there is nothing to choose yet.")
+        }
+
         provs.forEach { p ->
-            // Only worth offering when the provider is on and has a choice to make.
+            // A single-window provider has no choice to offer; the notes above cover it.
             if (!p.shown || !p.state.configured || p.state.windows.size < 2) return@forEach
-            if (!any) { windowBoxes.addView(heading("Windows")); any = true }
             windowBoxes.addView(TextView(this).apply {
                 text = p.name
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
@@ -265,22 +285,17 @@ class WidgetConfigActivity : AppCompatActivity() {
             p.state.windows.forEach { win ->
                 windowBoxes.addView(check(WidgetRenderer.windowName(win.label), win.label !in hidden) { on ->
                     if (on) hidden.remove(win.label) else hidden.add(win.label)
-                    draft = when (p.key) {
-                        "cl" -> draft.copy(hiddenClaude = hidden.toSet())
-                        "cx" -> draft.copy(hiddenCodex = hidden.toSet())
-                        else -> draft.copy(hiddenGemini = hidden.toSet())
-                    }
+                    draft = if (p.key == "cl") draft.copy(hiddenClaude = hidden.toSet())
+                            else draft.copy(hiddenCodex = hidden.toSet())
                     renderPreview()
                 })
             }
         }
     }
 
-    private fun hiddenFor(key: String): Set<String> = when (key) {
-        "cl" -> draft.hiddenClaude ?: global.hiddenClaude
-        "cx" -> draft.hiddenCodex ?: global.hiddenCodex
-        else -> draft.hiddenGemini ?: global.hiddenGemini
-    }
+    private fun hiddenFor(key: String): Set<String> =
+        if (key == "cl") draft.hiddenClaude ?: global.hiddenClaude
+        else draft.hiddenCodex ?: global.hiddenCodex
 
     private fun renderPreview() {
         val (w, h) = WidgetRenderer.sizeOf(this, widgetId)
@@ -309,7 +324,6 @@ class WidgetConfigActivity : AppCompatActivity() {
             style = draft.style?.takeIf { it != defaultStyle },
             showClaude = orNull(draft.showClaude, g.showClaude),
             showCodex = orNull(draft.showCodex, g.showCodex),
-            showGemini = orNull(draft.showGemini, g.showGemini),
             opacity = orNull(draft.opacity, g.opacity),
             projection = orNull(draft.projection, g.projection),
             sparkline = orNull(draft.sparkline, g.sparkline),
@@ -317,7 +331,6 @@ class WidgetConfigActivity : AppCompatActivity() {
             pace = orNull(draft.pace, g.pace),
             hiddenClaude = orNull(draft.hiddenClaude, g.hiddenClaude),
             hiddenCodex = orNull(draft.hiddenCodex, g.hiddenCodex),
-            hiddenGemini = orNull(draft.hiddenGemini, g.hiddenGemini),
         )
     }
 

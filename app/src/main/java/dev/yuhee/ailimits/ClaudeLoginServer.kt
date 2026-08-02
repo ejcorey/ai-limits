@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Loopback OAuth catcher for Claude, so signing in no longer means copying a code out of
  * a web page and pasting it back into the app.
  *
- * Unlike [CodexLoginServer] and [GeminiLoginServer], which own fixed ports, this binds an
+ * Unlike [CodexLoginServer], which owns a fixed port, this binds an
  * ephemeral one: Claude Code itself calls `listen(0)` and gets a different port on every
  * launch, which is what tells us the client accepts any loopback port. Binding happens in
  * the constructor rather than on the worker thread, because the authorize URL has to carry

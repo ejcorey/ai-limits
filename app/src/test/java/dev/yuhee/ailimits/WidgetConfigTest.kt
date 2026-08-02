@@ -31,7 +31,6 @@ class WidgetConfigTest {
     fun `a widget with no record inherits the app settings exactly`() {
         // Deliberately move every global off its default first: if optsFor quietly
         // substituted code defaults, this is where it would show.
-        Settings.setShowGemini(ctx, true)
         Settings.setShowCodex(ctx, false)
         Settings.setOpacity(ctx, 55)
         Settings.setShowProjection(ctx, false)
@@ -47,17 +46,16 @@ class WidgetConfigTest {
 
     @Test
     fun `only the fields a widget overrides differ from the app settings`() {
-        Settings.setShowGemini(ctx, true)
         Settings.setOpacity(ctx, 90)
         val global = WidgetRenderer.optsFrom(ctx)
 
-        val merged = WidgetRenderer.optsFor(WidgetConfig(showGemini = false, opacity = 60), global)
-        assertFalse(merged.showGemini)
+        val merged = WidgetRenderer.optsFor(WidgetConfig(showCodex = false, opacity = 60), global)
+        assertFalse(merged.showCodex)
         assertEquals(60, merged.opacity)
         // Untouched fields still track the app.
         assertEquals(global.showClaude, merged.showClaude)
         assertEquals(global.sparkline, merged.sparkline)
-        assertEquals(global.hiddenCodex, merged.hiddenCodex)
+        assertEquals(global.hiddenClaude, merged.hiddenClaude)
     }
 
     /** A widget showing nothing at all is not a state worth supporting. */
@@ -65,7 +63,7 @@ class WidgetConfigTest {
     fun `turning every provider off falls back to the app settings`() {
         val global = WidgetRenderer.optsFrom(ctx)
         val merged = WidgetRenderer.optsFor(
-            WidgetConfig(showClaude = false, showCodex = false, showGemini = false), global
+            WidgetConfig(showClaude = false, showCodex = false), global
         )
         assertEquals(global, merged)
         assertTrue(merged.shown > 0)
@@ -80,7 +78,7 @@ class WidgetConfigTest {
         // The whole safety property: everything untouched must come back null, not false.
         assertNull(back.showClaude)
         assertNull(back.sparkline)
-        assertNull(back.hiddenGemini)
+        assertNull(back.hiddenCodex)
     }
 
     @Test
@@ -192,6 +190,45 @@ class WidgetConfigTest {
         )
         assertEquals("runway", head)
         assertFalse(alarm)
+    }
+
+    /**
+     * Deleting Gemini's code does not delete Gemini's credentials. A Google refresh token
+     * does not expire on its own, and after the update there is no UI left to revoke it,
+     * so the tokens have to be erased rather than orphaned.
+     */
+    @Test
+    fun `removing gemini erases what it stored`() {
+        val p = ctx.getSharedPreferences("ailimits", Context.MODE_PRIVATE)
+        p.edit()
+            .putString("gm_access", "ya29.secret")
+            .putString("gm_refresh", "1//refresh-never-expires")
+            .putString("gm_project", "project-482913756123")
+            .putBoolean("show_gemini", true)
+            .putString("cl_access", "keep-me")
+            .remove("gm_purged")
+            .apply()
+
+        Prefs.purgeRemovedGemini(ctx)
+
+        listOf("gm_access", "gm_refresh", "gm_project", "show_gemini").forEach {
+            assertNull("$it should be gone", p.getString(it, null) ?: p.all[it])
+        }
+        assertEquals("other providers must be untouched", "keep-me", p.getString("cl_access", null))
+    }
+
+    @Test
+    fun `the gemini purge does not run on every launch`() {
+        Prefs.purgeRemovedGemini(ctx)
+        // A later write under a reused key must survive: the purge is a one-time migration,
+        // not a permanent filter.
+        ctx.getSharedPreferences("ailimits", Context.MODE_PRIVATE)
+            .edit().putString("gm_access", "written-after").apply()
+        Prefs.purgeRemovedGemini(ctx)
+        assertEquals(
+            "written-after",
+            ctx.getSharedPreferences("ailimits", Context.MODE_PRIVATE).getString("gm_access", null)
+        )
     }
 
     @Test

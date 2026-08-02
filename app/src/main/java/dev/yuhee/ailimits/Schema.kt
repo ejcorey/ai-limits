@@ -6,7 +6,8 @@ import org.json.JSONObject
 /**
  * Records the shape of a usage response — field *names* only, never values.
  *
- * The point is discovery. Gemini publishes an absolute `remainingAmount`, so the widget
+ * The point is discovery. A provider that starts publishing an absolute count would let
+ * the widget
  * can show real token counts for it; Claude and Codex publish percentages in every field
  * this app reads, so it shows none for them. Rather than assume that stays true, each
  * refresh notes the keys it actually saw, and "Copy diagnostics" reports them. If a
@@ -81,7 +82,7 @@ object Schema {
                     return
                 }
                 // Every element, not just the first: these payloads are only mostly
-                // homogeneous. Gemini treats remainingAmount as optional per bucket, so
+                // homogeneous. A provider may treat a count as optional per bucket, so
                 // sampling element 0 alone could miss the very field this exists to find.
                 for (i in 0 until node.length()) {
                     if (out.full) { out.truncated = true; return }

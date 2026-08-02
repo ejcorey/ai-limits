@@ -32,7 +32,7 @@ class WidgetRenderTest {
         var t = now - 24 * hour
         while (t <= now) {
             val k = (t - (now - 24 * hour)).toFloat() / (24 * hour)
-            add(HistoryPoint(t, (9 + 58 * k).toInt(), (6 + 34 * k).toInt(), (4 + 20 * k).toInt()))
+            add(HistoryPoint(t, (9 + 58 * k).toInt(), (6 + 34 * k).toInt()))
             t += 30 * 60_000L
         }
     }
@@ -49,10 +49,6 @@ class WidgetRenderTest {
         ),
         claudeErr: String? = null,
         codexConfigured: Boolean = true,
-        geminiWins: List<Win> = listOf(
-            Win("Pro", 37, now + 9 * hour, remaining = 1_240_000, unit = "TOKENS"),
-            Win("Flash", 12, now + 9 * hour, remaining = 8_900_000, unit = "TOKENS"),
-        ),
     ) = Snapshot(
         // Freshly fetched, so the ordinary shots show healthy colours; the staleness
         // test supplies its own older timestamps. Leaving these at 0 made every single
@@ -60,7 +56,6 @@ class WidgetRenderTest {
         ProviderState(true, claudeWins, claudeErr, null, now - 4 * 60_000),
         ProviderState(codexConfigured, codexWins, null, "plus", now - 4 * 60_000),
         now - 4 * 60_000,
-        ProviderState(true, geminiWins, null, "free-tier", now - 4 * 60_000),
     )
 
     /** Widgets are overwhelmingly seen on a dark home screen, so that is the default. */
@@ -190,7 +185,7 @@ class WidgetRenderTest {
             WidgetRenderer.Style.HORIZON to (264f to 120f),
             WidgetRenderer.Style.RUNWAY to (264f to 120f),
         )
-        val o = WidgetRenderer.Opts(showGemini = true)
+        val o = WidgetRenderer.Opts()
         for (style in WidgetRenderer.Style.entries) {
             val (w, h) = sizes.getValue(style)
             val (bmp, _) = WidgetRenderer.render(ctx, style, w, h, snap(), history, o = o)
@@ -215,7 +210,7 @@ class WidgetRenderTest {
     fun everyStyleShowsTheStalenessCue() {
         dark()
         val warn = ctx.getColor(R.color.warn)
-        // All three have gone quiet. Staleness has to be asserted on every provider
+        // Both have gone quiet. Staleness has to be asserted on every provider
         // because Pick draws only ONE of them — the one with the most headroom — so a
         // fixture where just one provider is old proves nothing about that style.
         // The fresh comparison below is what stops a style passing by painting amber
@@ -224,10 +219,9 @@ class WidgetRenderTest {
             ProviderState(true, listOf(Win("5h", 68, now + 3 * hour, lengthMs = 5 * hour)), null, null, now - 3 * hour),
             ProviderState(true, listOf(Win("5h", 41, now + hour, lengthMs = 5 * hour)), null, "plus", now - 3 * hour),
             now - 3 * hour,
-            ProviderState(true, listOf(Win("Pro", 37, now + 9 * hour)), null, "free-tier", now - 3 * hour),
         )
         val fresh = snap()
-        val o = WidgetRenderer.Opts(showGemini = true)
+        val o = WidgetRenderer.Opts()
 
         fun warnPixels(s: Snapshot, style: WidgetRenderer.Style, tag: String): Int {
             val (bmp, _) = WidgetRenderer.render(ctx, style, 264f, 160f, s, history, o = o)
@@ -257,6 +251,41 @@ class WidgetRenderTest {
         )
     }
 
+    /**
+     * Every style, at the smallest size its own provider XML lets a user drag it to, must
+     * still carry the stamp — when the limit comes back, and how old the numbers are.
+     *
+     * These two facts used to be available only in the styles that happened to have room,
+     * so a small widget showed a percentage the user could neither act on nor trust. The
+     * render returns whether the stamp was drawn, which is the same flag that reveals the
+     * "Open app" hit region, so this asserts the tap target exists there too.
+     */
+    @Test
+    fun everyStyleStampsResetAndAgeAtItsDeclaredMinimum() {
+        dark()
+        // (minResizeWidth, minResizeHeight) as declared in res/xml/widget_info*.xml.
+        val minimums = mapOf(
+            WidgetRenderer.Style.DETAIL to (120f to 48f),
+            WidgetRenderer.Style.BARS to (110f to 40f),
+            WidgetRenderer.Style.RINGS to (100f to 60f),
+            WidgetRenderer.Style.GRAPH to (140f to 70f),
+            WidgetRenderer.Style.BATTERY to (100f to 44f),
+            WidgetRenderer.Style.COUNTDOWN to (100f to 44f),
+            WidgetRenderer.Style.TICKER to (90f to 36f),
+            WidgetRenderer.Style.PICK to (56f to 40f),
+            WidgetRenderer.Style.HORIZON to (90f to 40f),
+            WidgetRenderer.Style.RUNWAY to (130f to 60f),
+        )
+        val missing = mutableListOf<String>()
+        for (style in WidgetRenderer.Style.entries) {
+            val (w, h) = minimums.getValue(style)
+            val (_, stamped) = WidgetRenderer.render(ctx, style, w, h, snap(), history)
+            if (!stamped) missing.add("$style at ${w.toInt()}x${h.toInt()}")
+        }
+        assertTrue("styles with no reset/updated stamp at their declared minimum: $missing",
+            missing.isEmpty())
+    }
+
     /** Every height in the resizable range must draw without throwing. */
     @Test
     fun everyHeightInRangeRenders() {
@@ -276,7 +305,7 @@ class WidgetRenderTest {
     @Test
     fun enlargedEnvelope() {
         dark()
-        val o = WidgetRenderer.Opts(showGemini = true)
+        val o = WidgetRenderer.Opts()
         for (style in WidgetRenderer.Style.entries) {
             val n = style.name.lowercase()
             shoot("big-$n-640x480", style, 640f, 480f, o = o)
@@ -285,19 +314,29 @@ class WidgetRenderTest {
         }
     }
 
-    /** Gemini reports real token counts; they must reach the widget, and be droppable. */
+    /**
+     * Absolute counts, where a provider reports one.
+     *
+     * No provider publishes a count today, so the fixture supplies one directly: the
+     * rendering path is still live, [Schema] exists precisely to notice when a provider
+     * starts publishing one, and an untested path would rot silently until then.
+     */
     @Test
     fun tokenCounts() {
         dark()
-        val onlyGemini = WidgetRenderer.Opts(showClaude = false, showCodex = false, showGemini = true)
-        shoot("tokens-solo-264x200", WidgetRenderer.Style.DETAIL, 264f, 200f, o = onlyGemini)
-        shoot("tokens-trio-264x232", WidgetRenderer.Style.DETAIL, 264f, 232f,
-            o = WidgetRenderer.Opts(showGemini = true))
-        shoot("tokens-battery-264x110", WidgetRenderer.Style.BATTERY, 264f, 110f, o = onlyGemini)
-        shoot("tokens-off-264x200", WidgetRenderer.Style.DETAIL, 264f, 200f,
-            o = onlyGemini.copy(tokens = false))
-        shoot("pace-off-264x200", WidgetRenderer.Style.DETAIL, 264f, 200f,
-            o = onlyGemini.copy(pace = false))
+        val counted = snap(
+            claudeWins = listOf(
+                Win("5h", 63, now + 3 * hour, remaining = 1_240_000, unit = "TOKENS", lengthMs = 5 * hour),
+            ),
+        )
+        val solo = WidgetRenderer.Opts(showCodex = false)
+        shoot("tokens-solo-264x200", WidgetRenderer.Style.DETAIL, 264f, 200f, counted, solo)
+        shoot("tokens-both-264x232", WidgetRenderer.Style.DETAIL, 264f, 232f, counted)
+        shoot("tokens-battery-264x110", WidgetRenderer.Style.BATTERY, 264f, 110f, counted, solo)
+        shoot("tokens-off-264x200", WidgetRenderer.Style.DETAIL, 264f, 200f, counted,
+            solo.copy(tokens = false))
+        shoot("pace-off-264x200", WidgetRenderer.Style.DETAIL, 264f, 200f, counted,
+            solo.copy(pace = false))
     }
 
     /**
@@ -313,9 +352,8 @@ class WidgetRenderTest {
             ProviderState(true, listOf(Win("5h", 68, now + 3 * hour)), "Sign in expired", null, now - 3 * hour),
             ProviderState(true, listOf(Win("5h", 41, now + hour)), null, "plus", now),
             now,
-            ProviderState(true, listOf(Win("Pro", 37, now + 9 * hour, 1_240_000, "TOKENS")), null, "free-tier", now),
         )
-        val o = WidgetRenderer.Opts(showGemini = true)
+        val o = WidgetRenderer.Opts()
         for (style in WidgetRenderer.Style.entries) {
             shoot("stale-${style.name.lowercase()}", style, 264f, 160f, stale, o)
         }
@@ -329,23 +367,23 @@ class WidgetRenderTest {
     @Test
     fun declaredMinimumsDoNotOverlap() {
         dark()
-        val trio = WidgetRenderer.Opts(showGemini = true)
+        val both = WidgetRenderer.Opts()
         // Graph legend used to print straight over its own title here — two providers,
         // declared minWidth, nothing unusual.
         shoot("min-graph-250x120", WidgetRenderer.Style.GRAPH, 250f, 120f)
-        shoot("min-graph-140x70", WidgetRenderer.Style.GRAPH, 140f, 70f, o = trio)
+        shoot("min-graph-140x70", WidgetRenderer.Style.GRAPH, 140f, 70f, o = both)
         // Bars had no height adaptation: row 0 sat above the top edge.
-        shoot("min-bars-250x40", WidgetRenderer.Style.BARS, 250f, 40f, o = trio)
-        shoot("min-bars-110x40", WidgetRenderer.Style.BARS, 110f, 40f, o = trio)
+        shoot("min-bars-250x40", WidgetRenderer.Style.BARS, 250f, 40f, o = both)
+        shoot("min-bars-110x40", WidgetRenderer.Style.BARS, 110f, 40f, o = both)
         // Countdown/battery sub-lines and ring captions collided across columns.
-        shoot("min-countdown-250x100", WidgetRenderer.Style.COUNTDOWN, 250f, 100f, o = trio)
-        shoot("min-battery-180x110", WidgetRenderer.Style.BATTERY, 180f, 110f, o = trio)
-        shoot("min-rings-100x88", WidgetRenderer.Style.RINGS, 100f, 88f, o = trio)
-        shoot("min-ticker-90x60", WidgetRenderer.Style.TICKER, 90f, 60f, o = trio)
+        shoot("min-countdown-250x100", WidgetRenderer.Style.COUNTDOWN, 250f, 100f, o = both)
+        shoot("min-battery-180x110", WidgetRenderer.Style.BATTERY, 180f, 110f, o = both)
+        shoot("min-rings-100x88", WidgetRenderer.Style.RINGS, 100f, 88f, o = both)
+        shoot("min-ticker-90x60", WidgetRenderer.Style.TICKER, 90f, 60f, o = both)
         // Detail: compact columns, the solo hero at the declared 48dp floor, and the
         // height where the footer used to be drawn over the last block.
-        shoot("min-detail-120x48", WidgetRenderer.Style.DETAIL, 120f, 48f, o = trio)
-        shoot("min-detail-180x180", WidgetRenderer.Style.DETAIL, 180f, 180f, o = trio)
+        shoot("min-detail-120x48", WidgetRenderer.Style.DETAIL, 120f, 48f, o = both)
+        shoot("min-detail-180x180", WidgetRenderer.Style.DETAIL, 180f, 180f, o = both)
         shoot("min-solo-120x48", WidgetRenderer.Style.DETAIL, 120f, 48f,
             o = WidgetRenderer.Opts(showCodex = false))
     }
@@ -410,14 +448,14 @@ class WidgetRenderTest {
         shoot("ticker-264x60", WidgetRenderer.Style.TICKER, 264f, 60f)
     }
 
-    /** Every style with all three providers on. */
+    /** Every style with both providers on. */
     @Test
-    fun threeProviders() {
+    fun bothProviders() {
         dark()
-        val o = WidgetRenderer.Opts(showGemini = true)
+        val o = WidgetRenderer.Opts()
         for (style in WidgetRenderer.Style.entries) {
-            shoot("trio-${style.name.lowercase()}-264x160", style, 264f, 160f, o = o)
-            shoot("trio-${style.name.lowercase()}-264x76", style, 264f, 76f, o = o)
+            shoot("duo-${style.name.lowercase()}-264x160", style, 264f, 160f, o = o)
+            shoot("duo-${style.name.lowercase()}-264x76", style, 264f, 76f, o = o)
         }
         shoot("trio-detail-264x232", WidgetRenderer.Style.DETAIL, 264f, 232f, o = o)
     }

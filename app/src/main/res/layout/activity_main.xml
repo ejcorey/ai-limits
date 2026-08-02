@@ -258,81 +258,6 @@
             </LinearLayout>
         </LinearLayout>
 
-        <!-- ============ Gemini ============ -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:background="@drawable/card_bg"
-            android:orientation="vertical"
-            android:padding="16dp">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Gemini"
-                android:textColor="@color/gemini"
-                android:textSize="16sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/geminiStatus"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="Not signed in"
-                android:textColor="@color/text2"
-                android:textSize="13sp" />
-
-            <LinearLayout
-                android:id="@+id/geminiRows"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:orientation="vertical" />
-
-            <LinearLayout
-                android:id="@+id/geminiWindows"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:visibility="gone" />
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:orientation="horizontal">
-
-                <Button
-                    android:id="@+id/btnGeminiSignIn"
-                    style="@style/Widget.Material3.Button.TonalButton"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1.2"
-                    android:text="Sign in" />
-
-                <Button
-                    android:id="@+id/btnGeminiPaste"
-                    style="@style/Widget.Material3.Button.TextButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="4dp"
-                    android:minWidth="0dp"
-                    android:paddingStart="10dp"
-                    android:paddingEnd="10dp"
-                    android:text="Paste" />
-
-                <Button
-                    android:id="@+id/btnGeminiSignOut"
-                    style="@style/Widget.Material3.Button.TextButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:text="Out" />
-            </LinearLayout>
-        </LinearLayout>
 
         <!-- ============ widget appearance ============ -->
         <LinearLayout
@@ -362,13 +287,6 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="Show Codex" />
-
-            <com.google.android.material.materialswitch.MaterialSwitch
-                android:id="@+id/swShowGemini"
-                style="@style/Row"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Show Gemini" />
 
             <TextView
                 android:id="@+id/soloHint"
@@ -441,7 +359,7 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Only where the provider publishes one. Gemini reports tokens remaining; Claude and Codex publish percentages only, so nothing is invented for them."
+                android:text="Only where the provider publishes one. Claude and Codex publish percentages only today, so nothing is invented for them."
                 android:textColor="@color/text2"
                 android:textSize="11sp" />
 

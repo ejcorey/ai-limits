@@ -45,7 +45,6 @@ class MainActivity : AppCompatActivity() {
     private val scope = MainScope()
     private var claudeServer: ClaudeLoginServer? = null
     private var codexServer: CodexLoginServer? = null
-    private var geminiServer: GeminiLoginServer? = null
 
     /**
      * Starts the Claude sign-in that needs no paste: open a loopback socket first so the
@@ -90,6 +89,8 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         applyInsets()
+        // Removing the code that reads a credential does not remove the credential.
+        Prefs.purgeRemovedGemini(this)
 
         findViewById<Button>(R.id.btnClaudeSignIn).setOnClickListener { startClaudeLogin() }
 
@@ -151,45 +152,6 @@ class MainActivity : AppCompatActivity() {
             updateStatus(); WidgetRenderer.updateAll(this)
         }
 
-        findViewById<Button>(R.id.btnGeminiSignIn).setOnClickListener {
-            geminiServer?.stop()
-            Prefs.clearGeminiPending(this)
-            val flow = GeminiApi.beginLogin(this)
-            geminiServer = GeminiLoginServer(applicationContext, flow) { err ->
-                runOnUiThread {
-                    if (isFinishing || isDestroyed) return@runOnUiThread
-                    if (err != null) {
-                        showError("Gemini sign-in failed", RuntimeException(err))
-                    }
-                    updateStatus()
-                }
-            }.also { it.start() }
-            openUrl(flow.url)
-            toast("Log in with Google, then come back here to finish")
-        }
-
-        findViewById<Button>(R.id.btnGeminiPaste).setOnClickListener {
-            promptText(
-                "Paste callback link",
-                "http://localhost:${GeminiApi.PORT}/oauth2callback?code=…"
-            ) { text ->
-                scope.launch {
-                    try {
-                        withContext(Dispatchers.IO) { GeminiApi.finishLoginManual(this@MainActivity, text) }
-                        onGeminiSignedIn()
-                    } catch (e: Exception) {
-                        showError("Gemini sign-in failed", e)
-                    }
-                }
-            }
-        }
-
-        findViewById<Button>(R.id.btnGeminiSignOut).setOnClickListener {
-            Prefs.clearGemini(this); UsageRepo.forget(this, "gemini")
-            updateStatus(); WidgetRenderer.updateAll(this)
-        }
-
-        findViewById<Button>(R.id.btnRefresh).setOnClickListener { refreshNowUi() }
         findViewById<Button>(R.id.btnDiagnostics).setOnClickListener { copyDiagnostics() }
 
         val intervals = listOf(15, 30, 60, 120)
@@ -256,9 +218,6 @@ class MainActivity : AppCompatActivity() {
         }
         switch(R.id.swShowCodex, Settings.showCodex(this)) { on ->
             Settings.setShowCodex(this, on); syncProviderSwitches(); applyWidgetChange()
-        }
-        switch(R.id.swShowGemini, Settings.showGemini(this)) { on ->
-            Settings.setShowGemini(this, on); syncProviderSwitches(); applyWidgetChange()
         }
         findViewById<TextView>(R.id.soloHint).visibility =
             if (Settings.solo(this)) View.VISIBLE else View.GONE
@@ -387,7 +346,7 @@ class MainActivity : AppCompatActivity() {
         // three releases because a hand-edit missed it.
         sb.append("version ").append(BuildConfig.VERSION_NAME).append('\n')
         sb.append("updated: ").append(if (snap.fetchedAt > 0) Date(snap.fetchedAt).toString() else "never").append('\n')
-        listOf("Claude" to snap.claude, "Codex" to snap.codex, "Gemini" to snap.gemini).forEach { (name, st) ->
+        listOf("Claude" to snap.claude, "Codex" to snap.codex).forEach { (name, st) ->
             sb.append(name).append(": configured=").append(st.configured)
             st.plan?.let { sb.append(" plan=").append(it) }
             // Summarised, not raw: a provider error can embed a server response body,
@@ -405,11 +364,8 @@ class MainActivity : AppCompatActivity() {
         // Field NAMES only, with anything that does not look like a field name redacted.
         // This is how we learn whether a provider has started publishing counts we could
         // be showing, without reproducing the values themselves.
-        Prefs.geminiBuckets(this)?.let {
-            sb.append("gemini raw buckets: ").append(it).append('\n')
-        }
         sb.append("response fields seen (names only):\n")
-        listOf("claude", "codex", "gemini").forEach { k ->
+        listOf("claude", "codex").forEach { k ->
             Prefs.responseKeys(this, k)?.let { sb.append("  ").append(k).append(": ").append(it).append('\n') }
         }
         (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager)
@@ -495,15 +451,7 @@ class MainActivity : AppCompatActivity() {
 
     private var claudeExchangeInFlight = false
     private var codexExchangeInFlight = false
-    private var geminiExchangeInFlight = false
 
-    /** A Gemini sign-in also turns its widget panel on — that's clearly what was wanted. */
-    private fun onGeminiSignedIn() {
-        Settings.setShowGemini(this, true)
-        syncProviderSwitches()
-        toast("Gemini signed in ✓")
-        afterSetupChanged()
-    }
 
     override fun onResume() {
         super.onResume()
@@ -545,26 +493,8 @@ class MainActivity : AppCompatActivity() {
             }
             return
         }
-        // same deal for a Gemini login
-        if (!geminiExchangeInFlight && Prefs.geminiPendingCode(this) != null) {
-            geminiExchangeInFlight = true
-            scope.launch {
-                try {
-                    withContext(Dispatchers.IO) { GeminiApi.completePendingLogin(this@MainActivity) }
-                    onGeminiSignedIn()
-                } catch (e: Exception) {
-                    showError("Gemini sign-in failed", e)
-                    updateStatus()
-                } finally {
-                    geminiExchangeInFlight = false
-                }
-            }
-            return
-        }
         // if a login just completed while we were in the browser, show fresh numbers
-        if (Prefs.claudeTokens(this).first != null || Prefs.codexTokens(this) != null ||
-            Prefs.geminiTokens(this).first != null
-        ) {
+        if (Prefs.claudeTokens(this).first != null || Prefs.codexTokens(this) != null) {
             val snap = UsageRepo.load(this)
             if (snap.fetchedAt == 0L) refreshNowUi()
         }
@@ -574,7 +504,6 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         claudeServer?.stop()
         codexServer?.stop()
-        geminiServer?.stop()
         scope.cancel()
     }
 
@@ -636,17 +565,8 @@ class MainActivity : AppCompatActivity() {
         }
         renderRows(findViewById(R.id.codexRows), snap.codex, ContextCompat.getColor(this, R.color.codex))
 
-        val (gmAccess, _, _) = Prefs.geminiTokens(this)
-        findViewById<TextView>(R.id.geminiStatus).text = when {
-            gmAccess == null -> "Not signed in"
-            snap.gemini.error != null -> "Signed in ✓ — ⚠ ${snap.gemini.error}"
-            else -> "Signed in ✓" + (snap.gemini.plan?.let { "  [$it]" } ?: "")
-        }
-        renderRows(findViewById(R.id.geminiRows), snap.gemini, ContextCompat.getColor(this, R.color.gemini))
-
         renderWindowToggles(findViewById(R.id.claudeWindows), snap.claude, "cl")
         renderWindowToggles(findViewById(R.id.codexWindows), snap.codex, "cx")
-        renderWindowToggles(findViewById(R.id.geminiWindows), snap.gemini, "gm")
 
         findViewById<TextView>(R.id.updated).text =
             if (snap.fetchedAt > 0) "Updated ${df.format(Date(snap.fetchedAt))}" else "Never updated"

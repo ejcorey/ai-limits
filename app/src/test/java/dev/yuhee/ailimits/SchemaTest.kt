@@ -69,9 +69,9 @@ class SchemaTest {
     }
 
     /**
-     * The whole point of this file is spotting a newly-published count. Gemini treats
-     * remainingAmount as optional per bucket, so sampling only the first element could
-     * miss exactly the field it exists to find.
+     * The whole point of this file is spotting a newly-published count. A provider may
+     * report such a field on only some array elements, so sampling the first element
+     * alone could miss exactly the field this exists to find.
      */
     @Test
     fun `a field present on only some array elements is still found`() {
@@ -107,8 +107,9 @@ class SchemaTest {
 
     @Test
     fun `a provider error is summarised before it can reach the clipboard`() {
-        // Google's error envelope names the consumer project; it must not survive.
-        val raw = "Gemini usage failed (HTTP 403): {\"error\":{\"message\":\"Cloud Code API " +
+        // A provider's error envelope can carry an account or project identifier;
+        // this text is offered for pasting into a bug report, so it must not survive.
+        val raw = "Usage failed (HTTP 403): {\"error\":{\"message\":\"API " +
             "has not been used in project 482913756123 before or it is disabled\"}}"
         val short = WidgetRenderer.shortError(raw)
         assertFalse(short, short.contains("482913756123"))

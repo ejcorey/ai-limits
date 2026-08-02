@@ -51,7 +51,6 @@ object WidgetRenderer {
     data class Opts(
         val showClaude: Boolean = true,
         val showCodex: Boolean = true,
-        val showGemini: Boolean = false,
         val opacity: Int = 100,
         val projection: Boolean = true,
         val sparkline: Boolean = true,
@@ -59,17 +58,15 @@ object WidgetRenderer {
         val pace: Boolean = true,
         val hiddenClaude: Set<String> = emptySet(),
         val hiddenCodex: Set<String> = emptySet(),
-        val hiddenGemini: Set<String> = emptySet(),
     ) {
         val shown: Int get() =
-            (if (showClaude) 1 else 0) + (if (showCodex) 1 else 0) + (if (showGemini) 1 else 0)
+            (if (showClaude) 1 else 0) + (if (showCodex) 1 else 0)
         val solo: Boolean get() = shown == 1
     }
 
     fun optsFrom(ctx: Context) = Opts(
         showClaude = Settings.showClaude(ctx),
         showCodex = Settings.showCodex(ctx),
-        showGemini = Settings.showGemini(ctx),
         opacity = Settings.opacity(ctx),
         projection = Settings.showProjection(ctx),
         sparkline = Settings.showSparkline(ctx),
@@ -77,7 +74,6 @@ object WidgetRenderer {
         pace = Settings.showPace(ctx),
         hiddenClaude = Settings.hiddenWindows(ctx, "cl"),
         hiddenCodex = Settings.hiddenWindows(ctx, "cx"),
-        hiddenGemini = Settings.hiddenWindows(ctx, "gm"),
     )
 
     // -- tiers -------------------------------------------------------------
@@ -180,7 +176,6 @@ object WidgetRenderer {
         val merged = global.copy(
             showClaude = cfg.showClaude ?: global.showClaude,
             showCodex = cfg.showCodex ?: global.showCodex,
-            showGemini = cfg.showGemini ?: global.showGemini,
             opacity = cfg.opacity ?: global.opacity,
             projection = cfg.projection ?: global.projection,
             sparkline = cfg.sparkline ?: global.sparkline,
@@ -188,7 +183,6 @@ object WidgetRenderer {
             pace = cfg.pace ?: global.pace,
             hiddenClaude = cfg.hiddenClaude ?: global.hiddenClaude,
             hiddenCodex = cfg.hiddenCodex ?: global.hiddenCodex,
-            hiddenGemini = cfg.hiddenGemini ?: global.hiddenGemini,
         )
         // Settings.setShown enforces this globally; a per-instance record has to be held
         // to the same rule, since a widget showing no providers at all just reads broken.
@@ -328,20 +322,114 @@ object WidgetRenderer {
         canvas.scale(pxW / wDp.coerceAtLeast(1f), pxH / hDp.coerceAtLeast(1f))
         val pen = Pen(canvas, t)
 
-        var footer = false
+        // The card is painted once, here, at the widget's true size — the styles below are
+        // handed a shorter canvas so the stamp has a strip of its own, and their own card()
+        // calls no-op. Below this height there is no room for a second line of type, so the
+        // style keeps the whole widget and the stamp is skipped.
+        // 56dp is the narrowest any style declares (Pick, at one cell). At that width only
+        // the age survives the measure below — a reset duration cannot be set legibly in
+        // what is left — but the age is the half that matters most, so it still runs.
+        val stampFits = hDp >= 36f && wDp >= 56f
+        pen.card(wDp, hDp, o.opacity)
+        val bodyH = if (stampFits) hDp - stampH(hDp) else hDp
+
         when (style) {
-            Style.BARS -> drawBars(pen, wDp, hDp, snap, t, o)
-            Style.RINGS -> drawRings(pen, wDp, hDp, snap, t, o)
-            Style.GRAPH -> drawGraph(pen, wDp, hDp, snap, hist, t, o)
-            Style.BATTERY -> drawBattery(pen, wDp, hDp, snap, t, o)
-            Style.COUNTDOWN -> drawCountdown(pen, wDp, hDp, snap, t, o)
-            Style.TICKER -> drawTicker(pen, wDp, hDp, snap, t, o)
-            Style.PICK -> drawPick(pen, wDp, hDp, snap, t, o)
-            Style.HORIZON -> drawHorizon(pen, wDp, hDp, snap, t, o)
-            Style.RUNWAY -> drawRunway(pen, wDp, hDp, snap, hist, t, o)
-            Style.DETAIL -> footer = drawDetail(pen, wDp, hDp, snap, hist, t, o, refreshing)
+            Style.BARS -> drawBars(pen, wDp, bodyH, snap, t, o)
+            Style.RINGS -> drawRings(pen, wDp, bodyH, snap, t, o)
+            Style.GRAPH -> drawGraph(pen, wDp, bodyH, snap, hist, t, o)
+            Style.BATTERY -> drawBattery(pen, wDp, bodyH, snap, t, o)
+            Style.COUNTDOWN -> drawCountdown(pen, wDp, bodyH, snap, t, o)
+            Style.TICKER -> drawTicker(pen, wDp, bodyH, snap, t, o)
+            Style.PICK -> drawPick(pen, wDp, bodyH, snap, t, o)
+            Style.HORIZON -> drawHorizon(pen, wDp, bodyH, snap, t, o)
+            Style.RUNWAY -> drawRunway(pen, wDp, bodyH, snap, hist, t, o)
+            Style.DETAIL -> drawDetail(pen, wDp, bodyH, snap, hist, t, o, refreshing)
         }
-        return bmp to footer
+        // The stamp is now the sole "Open app" affordance, and it reaches every style
+        // rather than only a tall Detail widget.
+        val stamped = stampFits && drawStamp(pen, wDp, hDp, snap, t, o, refreshing)
+        return bmp to stamped
+    }
+
+    /**
+     * Height reserved at the bottom for [drawStamp]. Thinner on short widgets, because
+     * "even when small" is the point of the stamp — a fixed 14dp band would have priced
+     * it out of exactly the sizes where a bare percentage is least informative.
+     */
+    private fun stampH(h: Float) = if (h < 64f) 11f else 14f
+
+    /**
+     * How old the numbers are, as one short token: "now", "4m", "2h", "3d".
+     *
+     * A negative age means the clock moved back, not that the data is fresh — reporting
+     * that as "now" is how a staleness check gets inverted, which has happened here before.
+     */
+    internal fun age(fetchedAt: Long, now: Long = System.currentTimeMillis()): String {
+        if (fetchedAt <= 0L) return "never"
+        val ms = now - fetchedAt
+        if (ms < 0L) return "?"
+        val m = ms / 60_000L
+        return when {
+            m < 1 -> "now"
+            m < 60 -> "${m}m"
+            m < 60 * 24 -> "${m / 60}h"
+            else -> "${m / (60 * 24)}d"
+        }
+    }
+
+    /**
+     * The one line every style carries, however small: when the tightest limit comes back,
+     * and how old these numbers are.
+     *
+     * Both facts used to be reachable only in the styles that happened to have room for
+     * them — a percentage with no reset time and no age is a number the user cannot act on
+     * or trust. Each half is measured and dropped independently, so a narrow widget loses
+     * the reset wording before it loses the age, and never overprints.
+     *
+     * @return true when anything was drawn, which is also the "Open app" hit region's cue.
+     */
+    private fun drawStamp(
+        g: Pen, w: Float, h: Float, snap: Snapshot, t: Theme, o: Opts, refreshing: Boolean,
+    ): Boolean {
+        val now = System.currentTimeMillis()
+        val panels = visible(snap, emptyList(), t, o)
+        val soonest = panels.mapNotNull { p ->
+            binding(p.state)?.resetsAt?.takeIf { it > now }
+        }.minOrNull()
+
+        val tight = h < 64f
+        val pad = if (tight) 7f else 9f
+        val avail = w - pad * 2
+        if (avail < 26f) return false
+        val baseY = h - (if (tight) 3.5f else 4.5f)
+        val size = if (tight) 8.5f else 9.5f
+
+        // Right: how old the data is. Drawn first because it is the half that must never
+        // be dropped — a stale number that looks current is worse than no reset time.
+        val ageText = if (refreshing) "updating…" else "⟳ " + age(snap.fetchedAt, now)
+        val stale = isStale(
+            // Any configured provider being stale is enough to colour the stamp.
+            panels.firstOrNull { isStale(it.state, now, t.staleAfterMs) }?.state
+                ?: ProviderState(false, emptyList(), null),
+            now, t.staleAfterMs,
+        )
+        val ageW = g.measure(ageText, size, 600)
+        if (ageW > avail) return false
+        g.text(ageText, w - pad, baseY, size, 600, if (stale) t.warn else t.faint, Paint.Align.RIGHT)
+
+        // Left: when capacity returns. The long form first, then the bare duration.
+        if (soonest != null) {
+            val room = avail - ageW - 8f
+            val full = "resets " + left(soonest)
+            val bare = left(soonest)
+            val text = when {
+                g.measure(full, size, 500) <= room -> full
+                g.measure(bare, size, 500) <= room -> bare
+                else -> null
+            }
+            if (text != null) g.text(text, pad, baseY, size, 500, t.faint)
+        }
+        return true
     }
 
     /**
@@ -369,7 +457,6 @@ object WidgetRenderer {
         }
         if (o.showClaude) add(panel(snap.claude, o.hiddenClaude, "Claude", t.claude, hist.map { it.t to it.claude }))
         if (o.showCodex) add(panel(snap.codex, o.hiddenCodex, "Codex", t.codex, hist.map { it.t to it.codex }))
-        if (o.showGemini) add(panel(snap.gemini, o.hiddenGemini, "Gemini", t.gemini, hist.map { it.t to it.gemini }))
     }
 
     private class Panel(
@@ -493,8 +580,10 @@ object WidgetRenderer {
             drawBlock(g, x, by, cw, p, t, o, tier, heroColW, stretch)
         }
 
-        if (foot) footer(g, x, cw, h - pad - 1f, t, snap, refreshing)
-        else staleDot(g, w, t, snap)
+        // The timestamp and the "Open app" region moved to the universal stamp, which every
+        // style now carries; drawing a second one here would just say it twice. The stale
+        // dot stays, because it is per-provider and the stamp's is whole-widget.
+        staleDot(g, w, t, snap)
         return foot
     }
 
@@ -1349,7 +1438,7 @@ object WidgetRenderer {
     // --- horizon ----------------------------------------------------------
     // Every upcoming reset of every window on one forward time axis. This is the only
     // style that shows the windows that are NOT binding — Claude's 7d/Opus/Sonnet, a
-    // Codex secondary, Gemini's per-model buckets — which the rest of the app discards.
+    // and a Codex secondary — which the rest of the app discards.
 
     private fun drawHorizon(g: Pen, w: Float, h: Float, snap: Snapshot, t: Theme, o: Opts) {
         g.card(w, h, o.opacity)
@@ -1365,8 +1454,8 @@ object WidgetRenderer {
             p.state.windows.filter { it.resetsAt > now }
                 .map { Ev(it.resetsAt, it.pct, it.label, p.name, p.color, p.state) }
         }
-        // A Gemini account reports one window per model, which would crowd the axis to
-        // uselessness; the fullest windows are the ones worth waiting for.
+        // A provider can report many windows, which would crowd the axis to uselessness;
+        // the fullest windows are the ones worth waiting for.
         val events = all.sortedByDescending { it.pct }.take(8).sortedBy { it.at }
 
         if (events.isEmpty()) {
@@ -1951,7 +2040,7 @@ object WidgetRenderer {
             "daily" -> "daily window"
             // Claude's model-scoped windows are all weekly.
             "opus", "sonnet", "haiku" -> "$label · 7-day"
-            // Anything else (e.g. Gemini's per-model buckets) gets a neutral name —
+            // Anything else gets a neutral name —
             // guessing a cadence we don't know would be wrong.
             else -> "$label limit"
         }
@@ -1996,7 +2085,6 @@ object WidgetRenderer {
         val rule = ctx.getColor(R.color.rule)
         val claude = ctx.getColor(R.color.claude)
         val codex = ctx.getColor(R.color.codex)
-        val gemini = ctx.getColor(R.color.gemini)
         val warn = ctx.getColor(R.color.warn)
         val red = ctx.getColor(R.color.red)
         val chipBg = ctx.getColor(R.color.chip_bg)
@@ -2014,6 +2102,7 @@ object WidgetRenderer {
     private class Pen(val c: Canvas, val t: Theme) {
         private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { fontFeatureSettings = "tnum" }
         private val r = RectF()
+        private var cardDrawn = false
 
         private fun face(weight: Int): Typeface = when {
             weight >= 700 -> BOLD
@@ -2086,7 +2175,18 @@ object WidgetRenderer {
             p.shader = null
         }
 
+        /**
+         * The rounded background. Only the first call paints.
+         *
+         * Every style opens by drawing its own card at the height it was handed, but the
+         * bottom strip is now reserved for the universal stamp, so the height a style sees
+         * is smaller than the widget. Painting once, up front, at the true size is what
+         * keeps the card behind the stamp instead of stopping short of it — and makes it
+         * unnecessary to thread an inset through all ten draw functions.
+         */
         fun card(w: Float, h: Float, opacityPct: Int = 100) {
+            if (cardDrawn) return
+            cardDrawn = true
             val a = (opacityPct.coerceIn(0, 100) * 255 / 100)
             rrect(0f, 0f, w, h, 22f, withAlpha(t.bg, a))
             r.set(.5f, .5f, w - .5f, h - .5f)

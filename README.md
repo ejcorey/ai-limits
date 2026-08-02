@@ -1,6 +1,6 @@
 # AI Limits
 
-Standalone Android app + home-screen widget that shows your **Claude**, **Codex (ChatGPT)** and **Gemini** usage-limit windows — the same numbers you see at claude.ai → Settings → Usage, chatgpt.com → Codex → Settings → Usage, and the Code Assist quota Gemini CLI runs against.
+Standalone Android app + home-screen widget that shows your **Claude** and **Codex (ChatGPT)** usage-limit windows — the same numbers you see at claude.ai → Settings → Usage and chatgpt.com → Codex → Settings → Usage.
 
 **Fully independent by design:** the app signs in to each provider with its own OAuth (PKCE) grant, entirely on the phone. It shares no tokens or sessions with the Claude app, the ChatGPT app, Claude Code, Codex CLI, or any other device — so token rotation elsewhere can never break it.
 
@@ -13,8 +13,7 @@ Grab `AILimits.apk` from the [latest release](../../releases/latest) and open it
 1. Open **Auspex**.
 2. **Claude → Sign in**: approve access in the browser and you come straight back — the app catches the redirect itself on a loopback listener, the same way Claude Code does (an OS-assigned port, path `/callback`).
 3. **Codex → Sign in with ChatGPT**: log in in the browser; the app catches the redirect automatically (loopback listener on `localhost:1455`, same mechanism Codex CLI uses).
-4. **Gemini → Sign in**: log in with Google; the app catches the redirect the same way (loopback on `localhost:7856`, the mechanism Gemini CLI uses). What's shown is the per-model Code Assist quota — the pool Gemini CLI draws from — with your tier as a chip.
-5. Long-press your home screen → **Widgets → Auspex** to add a widget.
+4. Long-press your home screen → **Widgets → Auspex** to add a widget.
 
 No provider needs a copy-and-paste step any more. Each still has a **Paste** button as a
 fallback for the case where the browser reaches the listener but Android has killed the app
@@ -41,8 +40,8 @@ Ten styles, all drawn on a canvas so they scale properly instead of clipping:
 
 **Pick** is the only style that needs no history at all, so it is fully populated one fetch
 after signing in — and the only one that reads at a single cell. **Horizon** is the only
-style that shows Claude's 7-day/Opus/Sonnet windows, a Codex secondary window, or Gemini's
-per-model buckets; every other style keeps just the tightest one. **Runway** stays empty
+style that shows Claude's 7-day/Opus/Sonnet windows and a Codex secondary window; every
+other style keeps just the tightest one. **Runway** stays empty
 until there is enough recent history to measure a burn rate, rather than drawing a
 projection it cannot support.
 
@@ -52,7 +51,8 @@ projection it cannot support.
 
 Every setting below is an app-wide **default**. Any single placed widget can override it:
 tap it under **Your widgets** in the app, or long-press it on the home screen (Android 12+).
-So a Ticker showing only Claude can sit next to a Runway showing all three.
+So a Ticker showing only Claude, with just its weekly window, can sit next to a Runway
+showing both providers.
 
 A widget you have not configured has no stored record at all, and keeps following the app
 defaults — including after an update, which is asserted by a test rather than assumed.
@@ -61,10 +61,10 @@ defaults — including after an update, which is asserted by a test rather than 
 
 All of these change the widgets immediately, with a live preview in the app:
 
-- **Which providers to show** — Claude, Codex, and optionally **Gemini**. With one provider on, it gets a roomier layout (a full row per window); with three, the widget lays out three panels. Gemini stays off widgets until you sign in.
-- **Exact counts over percentages**, where a provider publishes one. Gemini reports tokens remaining, so widgets can say "1.2M tokens left" instead of "63% left"; Claude and Codex publish percentages only, and nothing is invented for them.
+- **Which providers to show** — Claude, Codex, or either alone. With one provider on it gets a roomier layout (a full row per window).
+- **Exact counts over percentages**, where a provider publishes one. Neither Claude nor Codex does today — they expose percentages only, and a count is never invented from one. The rendering path and the field-name diagnostics both stay, so the day one of them starts publishing a count it shows up rather than going unnoticed.
 - **Pace against the clock** — "1.8x pace" means the window is being spent nearly twice as fast as it refills. Shown only for windows whose length is known, and only once enough of the window has elapsed for the ratio to mean anything.
-- **Which windows to show, per provider** — uncheck any limit window (say, hide Claude's 5-hour and keep only the weekly) and the widgets' headline becomes the fullest of what's left. New windows from the API appear automatically. When hiding windows changes which one leads, trend-derived extras (burn rate, projection, sparkline) go quiet rather than describing the wrong window.
+- **Which limit windows to show, per provider and per widget** — the 5-hour limit, the weekly one, or both. Uncheck any window (say, hide Claude's 5-hour and keep only the weekly) and the widget's headline becomes the fullest of what's left. New windows from the API appear automatically. When hiding windows changes which one leads, trend-derived extras (burn rate, projection, sparkline) go quiet rather than describing the wrong window.
 - **Theme** — follow the system, or force dark/light regardless of it.
 - **Background opacity**, 40–100%, for translucency over the wallpaper.
 - **Burn-projection warning** and **trend sparklines** can each be turned off.
@@ -76,12 +76,12 @@ All of these change the widgets immediately, with a live preview in the app:
 
 - **Claude**: 5-hour window, 7-day window, plus Opus/Sonnet 7-day windows when present.
 - **Codex**: primary (≈5 h) and weekly windows, plus the plan type as a chip.
-- **Gemini** (optional): live per-model quota — one window per model (3 Pro, 2.5 Flash…), each with its own % used and reset, plus your tier as a chip. Fetched from the same Cloud Code endpoint Gemini CLI uses, so it is the pool the CLI draws from and **not** the quota shown in the Gemini app or AI Studio. Buckets whose limit cannot be derived are dropped rather than shown as 100% used.
-- **Aligned across providers**: every bar starts at a shared column and the type is sized for a large phone, so two or three panels read as one even grid. Widgets resize across the full One UI cell range and degrade gracefully when narrow (dropping the least important element rather than clipping).
+- **Aligned across providers**: every bar starts at a shared column and the type is sized for a large phone, so both panels read as one even grid. Widgets resize across the full One UI cell range and degrade gracefully when narrow (dropping the least important element rather than clipping).
 - **The binding window** — whichever is fullest — is the headline number, because that is the one that will actually stop you.
 - **"USED" prefixes every headline number**, and a companion "N% left" is shown, so there is no confusion between how much is spent and how much remains.
 - **Burn rate**: how fast the binding window is climbing right now, in points per hour ("burning 6%/hr", "holding steady", "easing off"), read from recent history.
 - **Reset** as both a clock time and time remaining ("resets 18:12 · 3h 40m left").
+- **Every style, at every size, carries one line**: how long until the tightest limit comes back, and how old the numbers are ("resets 1h 11m   ⟳ 4m"). It holds down to each style's smallest draggable size, which is asserted by a test rather than assumed — a percentage with no reset time and no age is a number you can neither act on nor trust. That line is also the "open the app" tap target.
 - **Colour escalates** with pressure: provider colour under 75%, amber to 90%, red above.
 - **Burn projection**: if recent history says you will hit the cap before the window resets, the header switches to "on pace to cap 16:52".
 - Tall or sparkline-less widgets fill the freed space with the stats line rather than leaving a gap.
@@ -92,7 +92,6 @@ All of these change the widgets immediately, with a live preview in the app:
 
 - Claude: `claude.ai/oauth/authorize` PKCE flow → `api.anthropic.com/api/oauth/usage`.
 - Codex: `auth.openai.com/oauth/authorize` PKCE flow with an in-app loopback catcher on `http://localhost:1455/auth/callback` → `chatgpt.com/backend-api/wham/usage`. The refresh token rotates on every use; the app persists the new one each time.
-- Gemini: Google PKCE flow (`accounts.google.com`) with a loopback catcher on `http://localhost:7856/oauth2callback`, using Gemini CLI's public installed-app client — then `cloudcode-pa.googleapis.com/v1internal:loadCodeAssist` (tier + project, onboarding if needed) and `:retrieveUserQuota` (per-model buckets: fraction remaining + reset time). Endpoints and shapes verified against the Gemini CLI source.
 - Tokens live only in the app's private `SharedPreferences`.
 
 ## Building

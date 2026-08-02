@@ -98,56 +98,6 @@ object Prefs {
 
     fun clearCodexPending(ctx: Context) = p(ctx).edit().remove("cx_pending").apply()
 
-    // --- Gemini OAuth (Google) ---
-    fun geminiTokens(ctx: Context): Triple<String?, String?, Long> {
-        val p = p(ctx)
-        return Triple(p.getString("gm_access", null), p.getString("gm_refresh", null), p.getLong("gm_exp", 0))
-    }
-
-    fun setGeminiTokens(ctx: Context, access: String, refresh: String?, expMs: Long) {
-        p(ctx).edit().putString("gm_access", access).putString("gm_refresh", refresh).putLong("gm_exp", expMs).apply()
-    }
-
-    /** Google refresh tokens don't rotate, but the access token does; update it alone. */
-    fun setGeminiAccess(ctx: Context, access: String, expMs: Long) {
-        p(ctx).edit().putString("gm_access", access).putLong("gm_exp", expMs).apply()
-    }
-
-    fun clearGemini(ctx: Context) {
-        p(ctx).edit().remove("gm_access").remove("gm_refresh").remove("gm_exp")
-            .remove("gm_verifier").remove("gm_state").remove("gm_pending")
-            .remove("gm_project").remove("gm_tier").remove("gm_project_at").remove("keys_gemini")
-            .remove("gm_live")
-            .remove("gm_buckets").apply()
-    }
-
-    // PKCE in-flight state (survives process death while browser is open)
-    fun setGeminiFlow(ctx: Context, verifier: String, state: String) {
-        p(ctx).edit().putString("gm_verifier", verifier).putString("gm_state", state).apply()
-    }
-
-    fun geminiFlow(ctx: Context): Pair<String?, String?> =
-        Pair(p(ctx).getString("gm_verifier", null), p(ctx).getString("gm_state", null))
-
-    fun setGeminiPendingCode(ctx: Context, code: String) =
-        p(ctx).edit().putString("gm_pending", code).apply()
-
-    fun geminiPendingCode(ctx: Context): String? = p(ctx).getString("gm_pending", null)
-
-    fun clearGeminiPending(ctx: Context) = p(ctx).edit().remove("gm_pending").apply()
-
-    // The Cloud AI Companion project + tier from loadCodeAssist — stable per account,
-    // cached so usage polls don't repeat the onboarding round-trip.
-    fun geminiProject(ctx: Context): Pair<String?, String?> =
-        Pair(p(ctx).getString("gm_project", null), p(ctx).getString("gm_tier", null))
-
-    fun setGeminiProject(ctx: Context, project: String, tier: String?) =
-        p(ctx).edit().putString("gm_project", project).putString("gm_tier", tier)
-            .putLong("gm_project_at", System.currentTimeMillis()).apply()
-
-    /** When the project/tier was last confirmed with the server; 0 = unknown. */
-    fun geminiProjectAt(ctx: Context): Long = p(ctx).getLong("gm_project_at", 0)
-
     /**
      * Field names seen in the last usage response of each provider — names only, never
      * values, so it is safe to paste into a bug report. This is how we find out whether
@@ -163,22 +113,27 @@ object Prefs {
             .putString("keys_$provider", if (keys.length <= 600) keys else keys.take(580) + "… (cut)")
             .apply()
 
-    /** Gemini models ever seen holding quota; lets a later zero read as exhaustion. */
-    fun geminiLiveModels(ctx: Context): Set<String> =
-        HashSet(p(ctx).getStringSet("gm_live", emptySet()) ?: emptySet())
-
-    fun setGeminiLiveModels(ctx: Context, ids: Set<String>) =
-        p(ctx).edit().putStringSet("gm_live", HashSet(ids.take(40))).apply()
-
     /**
-     * Raw Gemini bucket values from the last fetch (model id, remaining fraction and
-     * amount). Usage figures, not credentials — kept so a wrong percentage on the home
-     * screen can be traced to the bucket that produced it.
+     * Erases everything the removed Gemini provider left behind — including a Google
+     * OAuth refresh token, which does not expire on its own.
+     *
+     * Deleting the code that reads a credential does not delete the credential; without
+     * this, updating to a build with no Gemini support would leave a live token for the
+     * user's Google account sitting in prefs indefinitely, with no UI left to revoke it.
+     * Runs once and records that it did, so it costs nothing on later launches.
      */
-    fun geminiBuckets(ctx: Context): String? = p(ctx).getString("gm_buckets", null)
-
-    fun setGeminiBuckets(ctx: Context, summary: String) =
-        p(ctx).edit().putString("gm_buckets", summary.take(500)).apply()
+    fun purgeRemovedGemini(ctx: Context) {
+        val p = p(ctx)
+        if (p.getBoolean("gm_purged", false)) return
+        p.edit()
+            .remove("gm_access").remove("gm_refresh").remove("gm_exp")
+            .remove("gm_verifier").remove("gm_state").remove("gm_pending")
+            .remove("gm_project").remove("gm_tier").remove("gm_project_at")
+            .remove("gm_live").remove("gm_buckets")
+            .remove("keys_gemini").remove("show_gemini").remove("hide_gm")
+            .putBoolean("gm_purged", true)
+            .apply()
+    }
 
     // --- Last usage snapshot (JSON) ---
     fun snapshot(ctx: Context): String? = p(ctx).getString("snapshot", null)

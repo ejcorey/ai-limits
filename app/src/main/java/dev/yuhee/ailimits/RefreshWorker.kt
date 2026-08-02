@@ -18,6 +18,9 @@ class RefreshWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ct
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
+            // Here as well as in the app, because a user who updates and never opens the
+            // app would otherwise keep a live Google refresh token on disk forever.
+            Prefs.purgeRemovedGemini(applicationContext)
             val snap = UsageRepo.fetchAll(applicationContext)
             Notifier.check(applicationContext, snap)
         } finally {

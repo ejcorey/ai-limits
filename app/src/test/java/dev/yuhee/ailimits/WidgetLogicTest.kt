@@ -234,7 +234,7 @@ class WidgetLogicTest {
         val fiveH = 5 * 3600_000L
         // Just after a reset any usage divides by almost zero — 1% in would read as 20x.
         assertEquals(null, WidgetRenderer.pace(Win("5h", 1, now + fiveH - 60_000), now))
-        // Unknown window length (a Gemini model bucket) means no elapsed fraction.
+        // Unknown window length means no elapsed fraction.
         assertEquals(null, WidgetRenderer.pace(Win("Pro", 50, now + fiveH), now))
         // No reset time at all.
         assertEquals(null, WidgetRenderer.pace(Win("5h", 50, 0), now))

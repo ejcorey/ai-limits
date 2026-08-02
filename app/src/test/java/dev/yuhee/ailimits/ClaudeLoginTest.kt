@@ -117,11 +117,9 @@ class ClaudeLoginTest {
     fun `pending codes are per provider`() {
         Prefs.setClaudePendingCode(ctx, "c-claude")
         Prefs.setCodexPendingCode(ctx, "c-codex")
-        Prefs.setGeminiPendingCode(ctx, "c-gemini")
         assertEquals("c-claude", Prefs.claudePendingCode(ctx))
         Prefs.clearClaudePending(ctx)
         assertNull(Prefs.claudePendingCode(ctx))
         assertEquals("c-codex", Prefs.codexPendingCode(ctx))
-        assertEquals("c-gemini", Prefs.geminiPendingCode(ctx))
     }
 }

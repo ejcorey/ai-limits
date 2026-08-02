@@ -36,26 +36,20 @@ object Settings {
 
     /**
      * Turning the last visible provider off is refused — it just comes back on. Written
-     * once for all three: the per-provider versions had drifted, and the Claude one
-     * checked only Codex, so hiding Claude force-enabled Codex even when Gemini was
-     * already showing. That pushed a "tap to sign in" panel onto laid-out widgets.
+     * once for both rather than per provider: the per-provider versions had drifted, and
+     * one of them checked the wrong sibling, which pushed a "tap to sign in" panel onto
+     * widgets people had already laid out.
      */
     private fun setShown(ctx: Context, key: String, on: Boolean) {
         p(ctx).edit().putBoolean(key, on).apply()
-        if (!on && !showClaude(ctx) && !showCodex(ctx) && !showGemini(ctx)) {
+        if (!on && !showClaude(ctx) && !showCodex(ctx)) {
             p(ctx).edit().putBoolean(key, true).apply()
         }
     }
 
-    // Gemini is opt-in (default off) so updating the app cannot dump a "tap to sign
-    // in" panel onto widgets people already laid out; signing in turns it on.
-    fun showGemini(ctx: Context): Boolean = p(ctx).getBoolean("show_gemini", false)
-
-    fun setShowGemini(ctx: Context, on: Boolean) = setShown(ctx, "show_gemini", on)
-
     /** How many providers are on. */
     fun shownCount(ctx: Context): Int =
-        (if (showClaude(ctx)) 1 else 0) + (if (showCodex(ctx)) 1 else 0) + (if (showGemini(ctx)) 1 else 0)
+        (if (showClaude(ctx)) 1 else 0) + (if (showCodex(ctx)) 1 else 0)
 
     /** True when exactly one provider is on — the widget then gets a roomier layout. */
     fun solo(ctx: Context): Boolean = shownCount(ctx) == 1
@@ -63,7 +57,7 @@ object Settings {
     // --- which windows appear, per provider --------------------------------
     // Stored as the labels the user has HIDDEN, so a brand-new window from the
     // API shows up by default instead of being invisible until found in settings.
-    // Keys: "cl", "cx", "gm".
+    // Keys: "cl", "cx".
 
     fun hiddenWindows(ctx: Context, key: String): Set<String> =
         // getStringSet's return must never be mutated or handed back to putStringSet,
@@ -93,7 +87,8 @@ object Settings {
 
     /**
      * Prefer an absolute count over a percentage where the provider reports one.
-     * Only Gemini does today, so this changes nothing for a Claude/Codex-only setup.
+     * Neither Claude nor Codex publishes one today, so this currently changes nothing;
+     * it stays because Schema records the field names that would reveal a new one.
      */
     fun showTokens(ctx: Context): Boolean = p(ctx).getBoolean("show_tokens", true)
     fun setShowTokens(ctx: Context, on: Boolean) =
