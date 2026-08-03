@@ -286,6 +286,31 @@ class WidgetRenderTest {
             missing.isEmpty())
     }
 
+    /**
+     * A widget pinned to ONE limit must say which limit that is.
+     *
+     * Two widgets both headed "Claude" — one showing the 5-hour window at 68% and one the
+     * weekly at 31% — are indistinguishable on a home screen, which defeats the point of
+     * being able to place a widget per limit.
+     */
+    @Test
+    fun singleLimitWidgetsNameTheirLimit() {
+        dark()
+        val claudeOnly = WidgetRenderer.Opts(showCodex = false)
+        // Claude reports 5h/7d/Opus; hide all but one and the heading should name it.
+        val fiveHour = claudeOnly.copy(hiddenClaude = setOf("7d", "Opus"))
+        val weekly = claudeOnly.copy(hiddenClaude = setOf("5h", "Opus"))
+        val codexWeekly = WidgetRenderer.Opts(showClaude = false, hiddenCodex = setOf("5h"))
+        for (style in WidgetRenderer.Style.entries) {
+            val n = style.name.lowercase()
+            shoot("one-$n-claude5h", style, 264f, 110f, o = fiveHour)
+            shoot("one-$n-claude7d", style, 264f, 110f, o = weekly)
+            shoot("one-$n-codex7d", style, 264f, 110f, o = codexWeekly)
+            // The sizes a single-limit widget is most likely to be placed at.
+            shoot("one-small-$n-claude5h", style, 150f, 72f, o = fiveHour)
+        }
+    }
+
     /** Every height in the resizable range must draw without throwing. */
     @Test
     fun everyHeightInRangeRenders() {

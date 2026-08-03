@@ -453,7 +453,13 @@ object WidgetRenderer {
             // derived from it (projection, burn rate, sparkline) is silently dropped by
             // handing the panel no history at all, rather than fabricating a trend.
             val sameHero = binding(filtered)?.label == binding(state)?.label
-            return Panel(filtered, name, color, if (sameHero) series else emptyList())
+            // When a widget is down to one window, its heading names that window —
+            // "Claude 5h", not "Claude". A widget pinned to a single limit is the whole
+            // point of the per-widget setup, and "Claude 68%" beside another widget also
+            // reading "Claude 31%" is unreadable without saying which limit each one is.
+            val only = filtered.windows.singleOrNull()
+            val heading = if (only != null) "$name ${only.label}" else name
+            return Panel(filtered, heading, name, color, if (sameHero) series else emptyList())
         }
         if (o.showClaude) add(panel(snap.claude, o.hiddenClaude, "Claude", t.claude, hist.map { it.t to it.claude }))
         if (o.showCodex) add(panel(snap.codex, o.hiddenCodex, "Codex", t.codex, hist.map { it.t to it.codex }))
@@ -461,7 +467,10 @@ object WidgetRenderer {
 
     private class Panel(
         val state: ProviderState,
+        /** Heading to draw: "Claude 5h" when this panel is down to one window, else "Claude". */
         val name: String,
+        /** The provider alone, for the few places too narrow to carry the qualified form. */
+        val provider: String,
         val color: Int,
         val series: List<Pair<Long, Int>>,
     )
@@ -949,8 +958,13 @@ object WidgetRenderer {
         val captionsFit = panels.all {
             g.measure(it.name.uppercase(), 10.5f, 700, .05f) <= w / n - 8f
         }
-        val showLabel = h >= 88f && captionsFit
-        val showSub = h >= 104f && captionsFit
+        // Lowered when the universal stamp took a strip off the bottom: these
+        // thresholds were tuned against the full widget height, so leaving them
+        // alone silently priced the heading out of the small sizes. The heading is
+        // what says WHICH limit a widget is about, so it outranks the sub-line —
+        // and the reset it used to carry is now in the stamp anyway.
+        val showLabel = h >= 54f && captionsFit
+        val showSub = h >= 98f && captionsFit
         val bottom = if (showSub) 30f else if (showLabel) 17f else 0f
         // One ring gets the whole card, so it can be much larger.
         val r = min((w / n - 30f) / 2f, (h - bottom - 14f) / 2f).coerceAtLeast(10f)
@@ -1009,8 +1023,11 @@ object WidgetRenderer {
 
         // Columns are budgeted from the width actually available rather than fixed
         // offsets, which used to go negative and push text past the right edge.
-        val nameW = min(62f, max(0f, cw * .26f))
-        val showName = nameW >= 44f
+        // A single-panel widget is usually one pinned to one limit, and its whole point
+        // is the heading — so it gets a wider name column and a shorter bar, rather than
+        // dropping the name and leaving "68%" with nothing saying what is at 68%.
+        val nameW = min(if (panels.size == 1) 96f else 62f, max(0f, cw * (if (panels.size == 1) .50f else .26f)))
+        val showName = nameW >= 38f
         // Wide enough to spell out "USED nn%"; otherwise the number stands alone.
         val showUsed = cw >= 210f
         val pctW = if (showUsed) min(86f, cw * .30f) else min(46f, cw * .18f)
@@ -1025,8 +1042,11 @@ object WidgetRenderer {
             g.circle(pad + 3.5f, y + 6.5f, 3.4f, dotColor(p.state, p.color, t))
             if (showName) {
                 // Bounded by where the bar starts, not merely by the column reservation.
+                // minSize matters here: the column reservation and the text budget are
+                // computed differently, so a name that "fits the column" could still be
+                // refused by fitText and vanish entirely rather than merely shrink.
                 g.fitText(p.name, pad + 12f, y + 11f, 11f, 700,
-                    nameColor(p.state, p.color, t), barX - pad - 16f, tracking = .03f)
+                    nameColor(p.state, p.color, t), barX - pad - 14f, tracking = .03f, minSize = 8f)
             }
             g.bar(barX, y + 4f, barW, 9f, b?.pct ?: 0, sc)
             val numRight = barX + barW + pctW
@@ -1109,8 +1129,13 @@ object WidgetRenderer {
         // A battery needs room for its body, cap and the gap to its neighbour. Below
         // that the bodies used to overlap and the percentages ran together.
         if (colW < 46f) { drawDense(g, w, h, panels, t, showRemaining = true); return }
-        val showName = h >= 74f
-        val showReset = h >= 100f
+        // Lowered when the universal stamp took a strip off the bottom: these
+        // thresholds were tuned against the full widget height, so leaving them
+        // alone silently priced the heading out of the small sizes. The heading is
+        // what says WHICH limit a widget is about, so it outranks the sub-line —
+        // and the reset it used to carry is now in the stamp anyway.
+        val showName = h >= 56f
+        val showReset = h >= 92f
         val bodyH = min(34f, h * .36f).coerceAtLeast(18f)
         // Clamped to the column, never merely coerced up past it.
         // coerceIn throws when its bounds invert, so the upper bound is floored rather
@@ -1149,7 +1174,8 @@ object WidgetRenderer {
                 // every other style reports percent USED, and an unlabelled number in a
                 // battery is the one place the two could be confused.
                 val caption = if (b != null) "${p.name} · left" else p.name
-                val cs = if (g.measure(caption, 10.5f, 700, .03f) <= colW - 6f) caption else p.name
+                val cs = listOf(caption, p.name, p.provider)
+                    .firstOrNull { g.measure(it, 10.5f, 700, .03f) <= colW - 6f } ?: p.provider
                 g.text(cs, cx, topY + bodyH + 14f, 10.5f, 700,
                     nameColor(p.state, p.color, t), Paint.Align.CENTER, .03f)
             }
@@ -1203,8 +1229,13 @@ object WidgetRenderer {
         // "3h 39m" at a legible size needs roughly this much column; under it the
         // durations from adjacent providers used to overprint each other.
         if (colW < 58f) { drawDense(g, w, h, panels, t); return }
-        val showName = h >= 66f
-        val showSub = h >= 92f
+        // Lowered when the universal stamp took a strip off the bottom: these
+        // thresholds were tuned against the full widget height, so leaving them
+        // alone silently priced the heading out of the small sizes. The heading is
+        // what says WHICH limit a widget is about, so it outranks the sub-line —
+        // and the reset it used to carry is now in the stamp anyway.
+        val showName = h >= 50f
+        val showSub = h >= 88f
         val big = min(colW * .22f, 27f).coerceAtLeast(14f)
         val block = (if (showName) 16f else 0f) + big + (if (showSub) 15f else 0f) + 10f
         val topY = (h - block) / 2f
@@ -1215,10 +1246,12 @@ object WidgetRenderer {
             val b = binding(p.state)
             var y = topY
             if (showName) {
-                g.circle(cx - g.measure(p.name, 10.5f, 700, .03f) / 2f - 9f, y + 6.5f, 3.4f,
+                val head = listOf(p.name, p.provider)
+                    .firstOrNull { g.measure(it, 10.5f, 700, .03f) + 13f <= colW - 4f } ?: p.provider
+                g.circle(cx - g.measure(head, 10.5f, 700, .03f) / 2f - 9f, y + 6.5f, 3.4f,
                     dotColor(p.state, p.color, t))
-                g.text(p.name, cx, y + 10.5f, 10.5f, 700,
-                    nameColor(p.state, p.color, t), Paint.Align.CENTER, .03f)
+                g.fitText(head, cx, y + 10.5f, 10.5f, 700,
+                    nameColor(p.state, p.color, t), colW - 4f, Paint.Align.CENTER, .03f)
                 y += 16f
             }
             if (b == null) {
@@ -1393,8 +1426,13 @@ object WidgetRenderer {
             sub = "free · " + shortWindow(bestWin.label)
         }
 
-        val showCaption = h >= 62f
-        val showSub = h >= 92f && sub != null
+        // Lowered when the universal stamp took a strip off the bottom: these
+        // thresholds were tuned against the full widget height, so leaving them
+        // alone silently priced the heading out of the small sizes. The heading is
+        // what says WHICH limit a widget is about, so it outranks the sub-line —
+        // and the reset it used to carry is now in the stamp anyway.
+        val showCaption = h >= 48f
+        val showSub = h >= 88f && sub != null
 
         // This number is what is LEFT; every other style in the app reports what is USED.
         // An unqualified "59%" next to a Ticker reading "41%" says the opposite of the
@@ -1557,6 +1595,8 @@ object WidgetRenderer {
         val dry: Long?,
         /** Whether a projection could have been computed at all — see [canProject]. */
         val measurable: Boolean,
+        /** Provider alone, for the lane label column when the qualified name will not fit. */
+        val provider: String = name,
     )
 
     /**
@@ -1597,7 +1637,10 @@ object WidgetRenderer {
 
         val lanes = panels.map { p ->
             val b = binding(p.state)
-            Lane(p.name, p.color, p.state, b, b?.let { projection(it, p.series) }, canProject(p.series, now))
+            Lane(
+                p.name, p.color, p.state, b, b?.let { projection(it, p.series) },
+                canProject(p.series, now), p.provider,
+            )
         }
 
         // A shared axis is the whole point — the lanes are only comparable against the
@@ -1630,7 +1673,8 @@ object WidgetRenderer {
 
         lanes.forEach { l ->
             val midY = y + laneH / 2f
-            g.fitText(l.name, pad, midY + 3.5f, 10.5f, 700,
+            val laneName = if (g.measure(l.name, 10.5f, 700) <= labelW - 6f) l.name else l.provider
+            g.fitText(laneName, pad, midY + 3.5f, 10.5f, 700,
                 nameColor(l.state, l.color, t), labelW - 6f)
 
             val trackH = min(8f, laneH * .38f).coerceAtLeast(4f)

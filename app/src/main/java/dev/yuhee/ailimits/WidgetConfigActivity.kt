@@ -38,6 +38,21 @@ class WidgetConfigActivity : AppCompatActivity() {
     private lateinit var preview: ImageView
     private lateinit var sizeLabel: TextView
     private lateinit var windowBoxes: LinearLayout
+    private lateinit var focusSpinner: Spinner
+    private lateinit var claudeBox: CheckBox
+    private lateinit var codexBox: CheckBox
+
+    /**
+     * One entry per limit the account actually reports, plus "Everything".
+     *
+     * Choosing one is a shortcut, not a new kind of state: it writes the same
+     * provider-visibility and hidden-window fields the checkboxes below do. That keeps a
+     * single source of truth for what a widget shows, so there is no second code path
+     * that could disagree with the first — and no migration to get wrong.
+     */
+    private class Focus(val label: String, val apply: (WidgetConfig) -> WidgetConfig)
+
+    private var focusChoices: List<Focus> = emptyList()
 
     /** What this widget resolves to today for every field the user can override. */
     private val global get() = WidgetRenderer.optsFrom(this)
@@ -143,14 +158,29 @@ class WidgetConfigActivity : AppCompatActivity() {
             setPadding(0, dp(4f), 0, 0)
         })
 
+        // --- what this widget is about
+        col.addView(heading("This widget shows"))
+        focusSpinner = Spinner(this)
+        col.addView(focusSpinner)
+        col.addView(TextView(this).apply {
+            text = "Pick one limit and this widget is about that limit alone — its heading says so, " +
+                "and you can place another widget for a different one."
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            alpha = .55f
+            setPadding(0, dp(4f), 0, 0)
+        })
+        renderFocusChoices()
+
         // --- providers
-        col.addView(heading("Show"))
-        col.addView(check("Claude", draft.showClaude ?: global.showClaude) {
+        col.addView(heading("Providers"))
+        claudeBox = check("Claude", draft.showClaude ?: global.showClaude) {
             draft = draft.copy(showClaude = it); afterProviderChange()
-        })
-        col.addView(check("Codex", draft.showCodex ?: global.showCodex) {
+        }
+        codexBox = check("Codex", draft.showCodex ?: global.showCodex) {
             draft = draft.copy(showCodex = it); afterProviderChange()
-        })
+        }
+        col.addView(claudeBox)
+        col.addView(codexBox)
 
         // --- windows
         windowBoxes = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -235,6 +265,91 @@ class WidgetConfigActivity : AppCompatActivity() {
     private fun afterProviderChange() {
         renderWindowToggles()
         renderPreview()
+    }
+
+    /**
+     * Builds the "this widget shows" list from the windows the account is really
+     * reporting, so it can never offer a limit that does not exist.
+     */
+    private fun renderFocusChoices() {
+        val snap = UsageRepo.load(this)
+        val choices = mutableListOf(
+            Focus("Everything") { c ->
+                c.copy(showClaude = null, showCodex = null, hiddenClaude = null, hiddenCodex = null)
+            }
+        )
+        fun addProvider(name: String, state: ProviderState, isClaude: Boolean) {
+            if (!state.configured || state.windows.isEmpty()) return
+            choices.add(
+                Focus("$name — all limits") { c ->
+                    if (isClaude) c.copy(showClaude = true, showCodex = false, hiddenClaude = emptySet())
+                    else c.copy(showClaude = false, showCodex = true, hiddenCodex = emptySet())
+                }
+            )
+            if (state.windows.size < 2) return
+            state.windows.forEach { win ->
+                // Everything except this one is hidden — that is what makes the widget
+                // about a single limit, and what makes its heading name that limit.
+                val others = state.windows.map { it.label }.filter { it != win.label }.toSet()
+                choices.add(
+                    Focus("$name · ${WidgetRenderer.windowName(win.label)}") { c ->
+                        if (isClaude) c.copy(showClaude = true, showCodex = false, hiddenClaude = others)
+                        else c.copy(showClaude = false, showCodex = true, hiddenCodex = others)
+                    }
+                )
+            }
+        }
+        addProvider("Claude", snap.claude, true)
+        addProvider("Codex", snap.codex, false)
+        focusChoices = choices
+
+        focusSpinner.adapter = ArrayAdapter(
+            this, android.R.layout.simple_spinner_dropdown_item, choices.map { it.label }
+        )
+        focusSpinner.setSelection(currentFocusIndex().coerceAtLeast(0))
+        var first = true
+        focusSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                if (first) { first = false; return }
+                draft = focusChoices[pos].apply(draft)
+                syncProviderBoxes()
+                renderWindowToggles()
+                renderPreview()
+            }
+            override fun onNothingSelected(p: AdapterView<*>?) {}
+        }
+    }
+
+    /** Which entry the draft currently matches, or 0 ("Everything") when it matches none. */
+    private fun currentFocusIndex(): Int {
+        val target = WidgetRenderer.optsFor(draft, global)
+        val snap = UsageRepo.load(this)
+        focusChoices.forEachIndexed { i, f ->
+            val opts = WidgetRenderer.optsFor(f.apply(WidgetConfig()), global)
+            if (i > 0 &&
+                opts.showClaude == target.showClaude &&
+                opts.showCodex == target.showCodex &&
+                opts.hiddenClaude == target.hiddenClaude &&
+                opts.hiddenCodex == target.hiddenCodex
+            ) return i
+        }
+        // Unused today beyond the guard above, but reading the snapshot keeps this honest
+        // if a provider stops reporting a window the draft still hides.
+        if (snap.claude.windows.isEmpty() && snap.codex.windows.isEmpty()) return 0
+        return 0
+    }
+
+    /** Keeps the provider checkboxes agreeing with a choice made in the spinner. */
+    private fun syncProviderBoxes() {
+        val opts = WidgetRenderer.optsFor(draft, global)
+        listOf(claudeBox to opts.showClaude, codexBox to opts.showCodex).forEach { (box, on) ->
+            box.setOnCheckedChangeListener(null)
+            box.isChecked = on
+            box.setOnCheckedChangeListener { _, v ->
+                draft = if (box === claudeBox) draft.copy(showClaude = v) else draft.copy(showCodex = v)
+                afterProviderChange()
+            }
+        }
     }
 
     private fun renderWindowToggles() {

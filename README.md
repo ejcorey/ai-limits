@@ -47,12 +47,35 @@ projection it cannot support.
 
 **Detail** re-lays itself out for the size you drag it to — from a two-column glance at 4×1, through a bar-per-provider at 4×2, to the full hero layout with per-provider 12-hour sparklines and a footer when it is tall enough. Every style is resizable to any cell count the launcher offers and drops its least important element rather than clipping: ring captions disappear before the dials shrink, the chart sheds its axes before the plot does, and dragging a widget taller grows the charts instead of leaving a gap.
 
+## One widget per limit
+
+Each limit can be its own widget, and every widget says which limit it is.
+
+Open a widget's settings — tap it under **Your widgets** in the app, or long-press it on
+the home screen (Android 12+) — and pick from **This widget shows**:
+
+    Everything
+    Claude — all limits
+    Claude · 5-hour window
+    Claude · 7-day window
+    Claude · Opus · 7-day
+    Codex — all limits
+    Codex · 5-hour window
+    Codex · weekly window
+
+The list is built from the limits your account actually reports, so it can never offer one
+that does not exist. Pick a single limit and the widget's heading becomes **"Claude 5h"**
+rather than just "Claude" — which is what makes two widgets side by side readable, since
+"Claude 68%" next to "Claude 31%" tells you nothing about which limit either is.
+
+Choosing a limit is a shortcut, not a separate mode: it writes the same provider and
+window fields the checkboxes below it do, so there is one source of truth for what a
+widget shows and no second code path that could disagree with the first.
+
 ## Per-widget settings
 
-Every setting below is an app-wide **default**. Any single placed widget can override it:
-tap it under **Your widgets** in the app, or long-press it on the home screen (Android 12+).
-So a Ticker showing only Claude, with just its weekly window, can sit next to a Runway
-showing both providers.
+Every setting is an app-wide **default**; any single placed widget can override it. So a
+Ticker pinned to Claude's weekly window can sit next to a Runway showing both providers.
 
 A widget you have not configured has no stored record at all, and keeps following the app
 defaults — including after an update, which is asserted by a test rather than assumed.
