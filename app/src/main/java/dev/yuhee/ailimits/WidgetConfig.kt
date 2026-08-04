@@ -23,6 +23,7 @@ data class WidgetConfig(
     val sparkline: Boolean? = null,
     val tokens: Boolean? = null,
     val pace: Boolean? = null,
+    val perWindow: Boolean? = null,
     val hiddenClaude: Set<String>? = null,
     val hiddenCodex: Set<String>? = null,
 ) {
@@ -30,7 +31,7 @@ data class WidgetConfig(
     val inheritsEverything: Boolean
         get() = style == null && showClaude == null && showCodex == null &&
             opacity == null && projection == null && sparkline == null && tokens == null &&
-            pace == null && hiddenClaude == null && hiddenCodex == null
+            pace == null && perWindow == null && hiddenClaude == null && hiddenCodex == null
 
     fun toJson(): String {
         val j = JSONObject()
@@ -42,6 +43,7 @@ data class WidgetConfig(
         sparkline?.let { j.put("spark", it) }
         tokens?.let { j.put("tok", it) }
         pace?.let { j.put("pace", it) }
+        perWindow?.let { j.put("perwin", it) }
         hiddenClaude?.let { j.put("hcl", JSONArray(it.toList())) }
         hiddenCodex?.let { j.put("hcx", JSONArray(it.toList())) }
         return j.toString()
@@ -67,6 +69,7 @@ data class WidgetConfig(
                 sparkline = bool("spark"),
                 tokens = bool("tok"),
                 pace = bool("pace"),
+                perWindow = bool("perwin"),
                 hiddenClaude = strings("hcl"),
                 hiddenCodex = strings("hcx"),
             )

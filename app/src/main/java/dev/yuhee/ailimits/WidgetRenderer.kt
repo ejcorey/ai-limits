@@ -56,6 +56,12 @@ object WidgetRenderer {
         val sparkline: Boolean = true,
         val tokens: Boolean = true,
         val pace: Boolean = true,
+        /**
+         * Give every selected limit its own panel instead of one panel per provider.
+         * Off by default: turning it on for an existing widget would silently split
+         * one row into three or four.
+         */
+        val perWindow: Boolean = false,
         val hiddenClaude: Set<String> = emptySet(),
         val hiddenCodex: Set<String> = emptySet(),
     ) {
@@ -72,6 +78,7 @@ object WidgetRenderer {
         sparkline = Settings.showSparkline(ctx),
         tokens = Settings.showTokens(ctx),
         pace = Settings.showPace(ctx),
+        perWindow = Settings.perWindow(ctx),
         hiddenClaude = Settings.hiddenWindows(ctx, "cl"),
         hiddenCodex = Settings.hiddenWindows(ctx, "cx"),
     )
@@ -181,6 +188,7 @@ object WidgetRenderer {
             sparkline = cfg.sparkline ?: global.sparkline,
             tokens = cfg.tokens ?: global.tokens,
             pace = cfg.pace ?: global.pace,
+            perWindow = cfg.perWindow ?: global.perWindow,
             hiddenClaude = cfg.hiddenClaude ?: global.hiddenClaude,
             hiddenCodex = cfg.hiddenCodex ?: global.hiddenCodex,
         )
@@ -352,6 +360,23 @@ object WidgetRenderer {
     }
 
     /**
+     * Corner radius of the card.
+     *
+     * Was a flat 22dp, which is a lot of curve on a 40dp-tall strip: the arc cut into the
+     * corners text was being drawn into, so content looked crowded against a shape that
+     * was itself too soft. Scaled to the widget now, and capped well below the old value.
+     */
+    internal fun cardRadius(w: Float, h: Float): Float =
+        min(14f, min(w, h) * .16f).coerceAtLeast(7f)
+
+    /**
+     * Horizontal inset that clears the corner arc. Text placed at a flat padding sits
+     * inside the curve on a small widget, which is what made the corners look tight.
+     */
+    private fun safeInset(w: Float, h: Float, base: Float) =
+        max(base, cardRadius(w, h) * .85f)
+
+    /**
      * Height reserved at the bottom for [drawStamp]. Thinner on short widgets, because
      * "even when small" is the point of the stamp — a fixed 14dp band would have priced
      * it out of exactly the sizes where a bare percentage is least informative.
@@ -398,10 +423,10 @@ object WidgetRenderer {
         }.minOrNull()
 
         val tight = h < 64f
-        val pad = if (tight) 7f else 9f
+        val pad = safeInset(w, h, if (tight) 8f else 10f)
         val avail = w - pad * 2
         if (avail < 26f) return false
-        val baseY = h - (if (tight) 3.5f else 4.5f)
+        val baseY = h - (if (tight) 5f else 6.5f)
         val size = if (tight) 8.5f else 9.5f
 
         // Right: how old the data is. Drawn first because it is the half that must never
@@ -446,23 +471,45 @@ object WidgetRenderer {
     private fun visible(
         snap: Snapshot, hist: List<HistoryPoint>, t: Theme, o: Opts,
     ): List<Panel> = buildList {
-        fun panel(state: ProviderState, hidden: Set<String>, name: String, color: Int, series: List<Pair<Long, Int>>): Panel {
+        fun emit(state: ProviderState, hidden: Set<String>, name: String, color: Int, series: List<Pair<Long, Int>>) {
             val filtered = filterWindows(state, hidden)
             // History tracks the *unfiltered* binding window. If hiding windows changed
             // which one leads, that series describes a different window — so everything
             // derived from it (projection, burn rate, sparkline) is silently dropped by
             // handing the panel no history at all, rather than fabricating a trend.
-            val sameHero = binding(filtered)?.label == binding(state)?.label
+            val heroLabel = binding(state)?.label
+
+            // A panel per LIMIT rather than per provider. Without this a widget can never
+            // put Claude's 5-hour and Claude's weekly side by side: the provider is one
+            // panel and only its fullest window is the headline, so the two limits a user
+            // most wants to compare are exactly the two that could not both be shown.
+            if (o.perWindow && filtered.windows.size > 1) {
+                filtered.windows.sortedByDescending { it.pct }.forEach { win ->
+                    add(
+                        Panel(
+                            filtered.copy(windows = listOf(win)),
+                            "$name ${win.label}",
+                            name,
+                            color,
+                            // Only the window the history actually tracked may claim it.
+                            if (win.label == heroLabel) series else emptyList(),
+                        )
+                    )
+                }
+                return
+            }
+
             // When a widget is down to one window, its heading names that window —
             // "Claude 5h", not "Claude". A widget pinned to a single limit is the whole
             // point of the per-widget setup, and "Claude 68%" beside another widget also
             // reading "Claude 31%" is unreadable without saying which limit each one is.
             val only = filtered.windows.singleOrNull()
             val heading = if (only != null) "$name ${only.label}" else name
-            return Panel(filtered, heading, name, color, if (sameHero) series else emptyList())
+            val sameHero = binding(filtered)?.label == heroLabel
+            add(Panel(filtered, heading, name, color, if (sameHero) series else emptyList()))
         }
-        if (o.showClaude) add(panel(snap.claude, o.hiddenClaude, "Claude", t.claude, hist.map { it.t to it.claude }))
-        if (o.showCodex) add(panel(snap.codex, o.hiddenCodex, "Codex", t.codex, hist.map { it.t to it.codex }))
+        if (o.showClaude) emit(snap.claude, o.hiddenClaude, "Claude", t.claude, hist.map { it.t to it.claude })
+        if (o.showCodex) emit(snap.codex, o.hiddenCodex, "Codex", t.codex, hist.map { it.t to it.codex })
     }
 
     private class Panel(
@@ -555,7 +602,14 @@ object WidgetRenderer {
 
         val n = panels.size
         val tier = tierFor(h, n, o.sparkline)
-        if (tier == COMPACT) { drawCompact(g, w, h, panels, t); return false }
+        if (tier == COMPACT) {
+            // With several limits on one widget the dense number strip becomes "68% 31%
+            // 12% 41% 22%" — five numbers and nothing saying what any of them is, which
+            // defeats the point of choosing those limits. A labelled slim row per limit
+            // fits the same height and keeps every one of them identifiable.
+            if (n > 2) drawBars(g, w, h, snap, t, o) else drawCompact(g, w, h, panels, t)
+            return false
+        }
 
         val pad = padFor(tier)
         val x = pad
@@ -572,7 +626,10 @@ object WidgetRenderer {
         // back, so the refresh icon could be drawn over the last block's meta line.
         var free = max(0f, slack - if (foot) FOOT else 0f)
         val canStretch = tier == RICH || tier == FULL
-        val gap = min(20f, max(MIN_GAP, free / max(1, n + 1)))
+        // Capped tighter than before: a tall widget should spend its slack on the
+        // blocks (stats line, taller sparkline) rather than on air between rows, and 20dp
+        // gaps read as the widget being half empty.
+        val gap = min(13f, max(MIN_GAP, free / max(1, n + 1)))
         free = max(0f, free - gap * (n - 1))
         val stretch = if (canStretch) min(96f, max(0f, free / max(1, n))) else 0f
         val bhEff = bh + stretch
@@ -1045,8 +1102,23 @@ object WidgetRenderer {
                 // minSize matters here: the column reservation and the text budget are
                 // computed differently, so a name that "fits the column" could still be
                 // refused by fitText and vanish entirely rather than merely shrink.
-                g.fitText(p.name, pad + 12f, y + 11f, 11f, 700,
-                    nameColor(p.state, p.color, t), barX - pad - 14f, tracking = .03f, minSize = 8f)
+                //
+                // The fallbacks run longest-first, and the WINDOW label outranks the bare
+                // provider name: with several limits from one provider on screen the dot
+                // colour already says which provider, so "Opus" distinguishes a row where
+                // "Claude" would not. A row identified only by a coloured dot is the exact
+                // failure this widget exists to avoid.
+                val budget = barX - pad - 14f
+                val candidates = listOfNotNull(
+                    p.name,
+                    p.state.windows.singleOrNull()?.label,
+                    p.provider,
+                )
+                val label = candidates.firstOrNull {
+                    g.measure(it, 8f, 700, .03f) <= budget
+                } ?: candidates.last()
+                g.fitText(label, pad + 12f, y + 11f, 11f, 700,
+                    nameColor(p.state, p.color, t), budget, tracking = .03f, minSize = 7.5f)
             }
             g.bar(barX, y + 4f, barW, 9f, b?.pct ?: 0, sc)
             val numRight = barX + barW + pctW
@@ -1077,7 +1149,11 @@ object WidgetRenderer {
     private fun drawDense(
         g: Pen, w: Float, h: Float, panels: List<Panel>, t: Theme, showRemaining: Boolean = false,
     ) {
-        data class Seg(val pct: String, val color: Int, val state: ProviderState, val base: Int)
+        data class Seg(
+            val pct: String, val color: Int, val state: ProviderState, val base: Int,
+            /** "5h", "7d"… — which limit this number belongs to, when it fits. */
+            val tag: String,
+        )
         val segs = panels.map { p ->
             val b = binding(p.state)
             // showRemaining exists so Battery's fallback keeps Battery's meaning. Without
@@ -1088,12 +1164,19 @@ object WidgetRenderer {
                 showRemaining -> "${100 - b.pct}%"
                 else -> "${b.pct}%"
             }
-            Seg(value, if (b != null) t.status(b.pct, p.color) else t.faint, p.state, p.color)
+            // Only when this panel IS one limit. With several limits on one widget the
+            // colour-coded dot says which provider but nothing says which window, and a
+            // row of bare percentages is unreadable.
+            val tag = p.state.windows.singleOrNull()?.label.orEmpty()
+            Seg(value, if (b != null) t.status(b.pct, p.color) else t.faint, p.state, p.color, tag)
         }
 
         var shownCount = segs.size
+        // Tags are all-or-nothing: half-labelled numbers read worse than none.
+        var tags = segs.any { it.tag.isNotEmpty() }
+        fun segText(s: Seg) = if (tags && s.tag.isNotEmpty()) "${s.tag} ${s.pct}" else s.pct
         fun layout(size: Float, gap: Float, dot: Float): Float =
-            segs.take(shownCount).sumOf { (g.measure(it.pct, size, 700) + dot * 2 + 3f).toDouble() }
+            segs.take(shownCount).sumOf { (g.measure(segText(it), size, 700) + dot * 2 + 3f).toDouble() }
                 .toFloat() + gap * (shownCount - 1)
 
         // Shrink, then tighten the gap, before giving up and using the smallest.
@@ -1106,6 +1189,17 @@ object WidgetRenderer {
             dot = max(1.8f, dot - .12f)
         }
 
+        // Drop the tags before dropping whole limits: a number without its label still
+        // shows that the limit exists, whereas removing the segment hides it entirely.
+        if (tags && layout(size, gap, dot) > w - 6f) {
+            tags = false
+            size = 13f; gap = 9f; dot = 3.2f
+            while (size > 8f && layout(size, gap, dot) > w - 10f) {
+                size -= .5f
+                gap = max(3f, gap - .4f)
+                dot = max(1.8f, dot - .12f)
+            }
+        }
         // The loop above gives up at its floor whether or not the result fits, so the
         // last resort is dropping segments rather than painting past both edges.
         while (shownCount > 1 && layout(size, gap, dot) > w - 6f) shownCount--
@@ -1115,7 +1209,7 @@ object WidgetRenderer {
         segs2.forEach { sg ->
             g.circle(x + dot, baseY - size * .32f, dot, dotColor(sg.state, sg.base, t))
             x += dot * 2 + 3f
-            x += g.text(sg.pct, x, baseY, size, 700, sg.color) + gap
+            x += g.text(segText(sg), x, baseY, size, 700, sg.color) + gap
         }
     }
 
@@ -2232,13 +2326,14 @@ object WidgetRenderer {
             if (cardDrawn) return
             cardDrawn = true
             val a = (opacityPct.coerceIn(0, 100) * 255 / 100)
-            rrect(0f, 0f, w, h, 22f, withAlpha(t.bg, a))
+            val rad = cardRadius(w, h)
+            rrect(0f, 0f, w, h, rad, withAlpha(t.bg, a))
             r.set(.5f, .5f, w - .5f, h - .5f)
             p.style = Paint.Style.STROKE
             p.strokeWidth = 1f
             p.color = withAlpha(t.stroke, Color.alpha(t.stroke) * a / 255)
             p.shader = null
-            c.drawRoundRect(r, 21.5f, 21.5f, p)
+            c.drawRoundRect(r, rad - .5f, rad - .5f, p)
             p.style = Paint.Style.FILL
         }
 

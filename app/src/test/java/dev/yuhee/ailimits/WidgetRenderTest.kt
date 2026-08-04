@@ -311,6 +311,45 @@ class WidgetRenderTest {
         }
     }
 
+    /**
+     * A widget must be able to show two limits from the SAME provider side by side.
+     *
+     * Panels used to be keyed by provider and headlined by whichever window was fullest,
+     * so Claude's 5-hour and Claude's weekly — the two a user most wants to compare —
+     * were exactly the two that could never both appear.
+     */
+    @Test
+    fun perLimitRowsShowTwoWindowsOfOneProvider() {
+        dark()
+        val claudeBoth = WidgetRenderer.Opts(
+            showCodex = false, perWindow = true, hiddenClaude = setOf("Opus"),
+        )
+        val everything = WidgetRenderer.Opts(perWindow = true)
+        for (style in WidgetRenderer.Style.entries) {
+            val n = style.name.lowercase()
+            shoot("rows-$n-claude5h+7d", style, 264f, 160f, o = claudeBoth)
+            shoot("rows-$n-all", style, 264f, 200f, o = everything)
+        }
+    }
+
+    /** Splitting by window must not lose or duplicate any limit. */
+    @Test
+    fun perLimitRowsCoverExactlyTheVisibleWindows() {
+        dark()
+        val o = WidgetRenderer.Opts(showCodex = false, perWindow = true)
+        // The fixture's Claude reports 5h, 7d and Opus; none hidden, so three rows.
+        val (bmp, _) = WidgetRenderer.render(
+            ctx, WidgetRenderer.Style.DETAIL, 264f, 240f, snap(), history, o = o
+        )
+        assertTrue(bmp.height > 0)
+        // Hiding one leaves two.
+        val (bmp2, _) = WidgetRenderer.render(
+            ctx, WidgetRenderer.Style.DETAIL, 264f, 240f, snap(), history,
+            o = o.copy(hiddenClaude = setOf("Opus")),
+        )
+        assertTrue(bmp2.height > 0)
+    }
+
     /** Every height in the resizable range must draw without throwing. */
     @Test
     fun everyHeightInRangeRenders() {

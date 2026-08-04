@@ -194,6 +194,9 @@ class MainActivity : AppCompatActivity() {
             override fun onStopTrackingTouch(sb: SeekBar?) { applyWidgetChange() }
         })
 
+        switch(R.id.swPerWindow, Settings.perWindow(this)) { on ->
+            Settings.setPerWindow(this, on); applyWidgetChange()
+        }
         switch(R.id.swProjection, Settings.showProjection(this)) { on ->
             Settings.setShowProjection(this, on); applyWidgetChange()
         }

@@ -77,6 +77,11 @@ widget shows and no second code path that could disagree with the first.
 Every setting is an app-wide **default**; any single placed widget can override it. So a
 Ticker pinned to Claude's weekly window can sit next to a Runway showing both providers.
 
+**Each limit gets its own row** turns one row per *provider* into one row per *limit*, so a
+single widget can show Claude's 5-hour and Claude's weekly side by side — any combination
+of limits across both providers, each labelled. It is off by default, because turning it on
+for a widget you already placed would split one row into several without asking.
+
 A widget you have not configured has no stored record at all, and keeps following the app
 defaults — including after an update, which is asserted by a test rather than assumed.
 

@@ -182,6 +182,20 @@ class WidgetConfigActivity : AppCompatActivity() {
         col.addView(claudeBox)
         col.addView(codexBox)
 
+        // --- one row per limit
+        col.addView(check("Each limit gets its own row", draft.perWindow ?: global.perWindow) {
+            draft = draft.copy(perWindow = it)
+            renderWindowToggles()
+            renderPreview()
+        })
+        col.addView(TextView(this).apply {
+            text = "On, a widget can show Claude's 5-hour and Claude's weekly as two separate rows. " +
+                "Off, each provider gets one row showing whichever of its limits is fullest."
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            alpha = .55f
+            setPadding(0, dp(2f), 0, 0)
+        })
+
         // --- windows
         windowBoxes = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         col.addView(windowBoxes)
@@ -444,6 +458,7 @@ class WidgetConfigActivity : AppCompatActivity() {
             sparkline = orNull(draft.sparkline, g.sparkline),
             tokens = orNull(draft.tokens, g.tokens),
             pace = orNull(draft.pace, g.pace),
+            perWindow = orNull(draft.perWindow, g.perWindow),
             hiddenClaude = orNull(draft.hiddenClaude, g.hiddenClaude),
             hiddenCodex = orNull(draft.hiddenCodex, g.hiddenCodex),
         )

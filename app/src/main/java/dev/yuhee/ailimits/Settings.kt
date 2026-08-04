@@ -94,6 +94,16 @@ object Settings {
     fun setShowTokens(ctx: Context, on: Boolean) =
         p(ctx).edit().putBoolean("show_tokens", on).apply()
 
+    /**
+     * One panel per selected limit rather than one per provider — what lets a single
+     * widget show Claude's 5-hour and Claude's weekly as two rows.
+     *
+     * Defaults off so an update cannot split an existing widget's single row into three.
+     */
+    fun perWindow(ctx: Context): Boolean = p(ctx).getBoolean("per_window", false)
+    fun setPerWindow(ctx: Context, on: Boolean) =
+        p(ctx).edit().putBoolean("per_window", on).apply()
+
     /** Compare spend against how much of the window has elapsed. */
     fun showPace(ctx: Context): Boolean = p(ctx).getBoolean("show_pace", true)
     fun setShowPace(ctx: Context, on: Boolean) =
