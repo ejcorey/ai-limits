@@ -245,6 +245,17 @@ object WidgetRenderer {
     /** Every placed widget of ours, newest provider order. */
     fun allWidgetIds(ctx: Context): List<Int> = providers.flatMap { ids(ctx, it).toList() }
 
+    /**
+     * The receiver that natively draws a style — the inverse of [defaultStyleFor].
+     *
+     * Used to pin a widget from inside the app. It has to be the *matching* receiver
+     * rather than any of them, because the provider XML is what fixes a widget's default
+     * and minimum size, and pinning a Ticker through the Detail receiver would give it
+     * Detail's 4x3 footprint.
+     */
+    fun providerClassFor(style: Style): Class<*> =
+        providers.firstOrNull { defaultStyleFor(it) == style } ?: UsageWidgetProvider::class.java
+
     internal fun defaultStyleFor(cls: Class<*>): Style = when (cls) {
         BarsWidgetProvider::class.java -> Style.BARS
         PercentWidgetProvider::class.java -> Style.RINGS

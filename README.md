@@ -13,7 +13,7 @@ Grab `AILimits.apk` from the [latest release](../../releases/latest) and open it
 1. Open **Auspex**.
 2. **Claude → Sign in**: approve access in the browser and you come straight back — the app catches the redirect itself on a loopback listener, the same way Claude Code does (an OS-assigned port, path `/callback`).
 3. **Codex → Sign in with ChatGPT**: log in in the browser; the app catches the redirect automatically (loopback listener on `localhost:1455`, same mechanism Codex CLI uses).
-4. Long-press your home screen → **Widgets → Auspex** to add a widget.
+4. Pick a style in **Widget preview**, then tap **Add this widget to the home screen** — or long-press the home screen → **Widgets → Auspex**.
 
 No provider needs a copy-and-paste step any more. Each still has a **Paste** button as a
 fallback for the case where the browser reaches the listener but Android has killed the app

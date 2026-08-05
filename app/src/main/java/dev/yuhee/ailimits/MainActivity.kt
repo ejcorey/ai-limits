@@ -153,6 +153,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.btnDiagnostics).setOnClickListener { copyDiagnostics() }
+        findViewById<Button>(R.id.btnAddWidget).setOnClickListener { pinPreviewedStyle() }
 
         val intervals = listOf(15, 30, 60, 120)
         spinner(R.id.spinnerInterval, intervals.map { if (it < 60) "$it min" else "${it / 60} h" },
@@ -432,6 +433,31 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    /**
+     * Puts the style currently in the preview onto the home screen, without making the
+     * user go and find it in the launcher's widget list.
+     *
+     * The receiver has to match the style: the provider XML is what fixes a widget's
+     * default and minimum size, so pinning a Ticker through the Detail receiver would
+     * hand it Detail's 4x3 footprint.
+     *
+     * Not every launcher implements this, and the ones that don't say so up front rather
+     * than silently doing nothing.
+     */
+    private fun pinPreviewedStyle() {
+        val mgr = android.appwidget.AppWidgetManager.getInstance(this)
+        val style = Settings.previewStyle(this)
+        if (!mgr.isRequestPinAppWidgetSupported) {
+            toast("This launcher can't add widgets from inside an app — long-press the home screen → Widgets → Auspex")
+            return
+        }
+        val ok = mgr.requestPinAppWidget(
+            android.content.ComponentName(this, WidgetRenderer.providerClassFor(style)), null, null
+        )
+        if (ok) toast("Confirm on the home screen to add ${style.label}")
+        else toast("The launcher refused the request — add it from the home screen instead")
+    }
 
     /**
      * Android 15 draws every targetSdk-35 app edge-to-edge, so the window no longer

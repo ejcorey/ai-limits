@@ -104,6 +104,14 @@
                 android:text="Drag to see how it reflows when resized"
                 android:textColor="@color/text2"
                 android:textSize="11sp" />
+
+            <Button
+                android:id="@+id/btnAddWidget"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="Add this widget to the home screen" />
         </LinearLayout>
 
         <!-- ============ Claude ============ -->
