@@ -13,6 +13,8 @@ import android.widget.Button
 import android.widget.CheckBox
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.Spinner
@@ -37,22 +39,7 @@ class WidgetConfigActivity : AppCompatActivity() {
     private var draft = WidgetConfig()
     private lateinit var preview: ImageView
     private lateinit var sizeLabel: TextView
-    private lateinit var windowBoxes: LinearLayout
-    private lateinit var focusSpinner: Spinner
-    private lateinit var claudeBox: CheckBox
-    private lateinit var codexBox: CheckBox
-
-    /**
-     * One entry per limit the account actually reports, plus "Everything".
-     *
-     * Choosing one is a shortcut, not a new kind of state: it writes the same
-     * provider-visibility and hidden-window fields the checkboxes below do. That keeps a
-     * single source of truth for what a widget shows, so there is no second code path
-     * that could disagree with the first — and no migration to get wrong.
-     */
-    private class Focus(val label: String, val apply: (WidgetConfig) -> WidgetConfig)
-
-    private var focusChoices: List<Focus> = emptyList()
+    private lateinit var limitList: LinearLayout
 
     /** What this widget resolves to today for every field the user can override. */
     private val global get() = WidgetRenderer.optsFrom(this)
@@ -158,48 +145,44 @@ class WidgetConfigActivity : AppCompatActivity() {
             setPadding(0, dp(4f), 0, 0)
         })
 
-        // --- what this widget is about
-        col.addView(heading("This widget shows"))
-        focusSpinner = Spinner(this)
-        col.addView(focusSpinner)
+        // --- which limits, as ONE flat list ------------------------------------
+        // This replaced a spinner of preset combinations plus separate provider and
+        // window sections. Those could express any combination, but only by composing
+        // three controls in different places — and the one combination people actually
+        // wanted (Claude 5-hour + Claude weekly + a Codex limit) was impossible to see.
+        // A checklist over every limit the accounts report makes every permutation one
+        // glance and N taps.
+        col.addView(heading("Limits on this widget"))
         col.addView(TextView(this).apply {
-            text = "Pick one limit and this widget is about that limit alone — its heading says so, " +
-                "and you can place another widget for a different one."
+            text = "Tick any combination."
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             alpha = .55f
-            setPadding(0, dp(4f), 0, 0)
         })
-        renderFocusChoices()
+        limitList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(limitList)
+        renderLimitChecklist()
 
-        // --- providers
-        col.addView(heading("Providers"))
-        claudeBox = check("Claude", draft.showClaude ?: global.showClaude) {
-            draft = draft.copy(showClaude = it); afterProviderChange()
+        // --- how the ticked limits become rows
+        col.addView(heading("Rows"))
+        val perProv = RadioButton(this).apply {
+            id = View.generateViewId()
+            text = "One row per provider — its fullest ticked limit leads"
         }
-        codexBox = check("Codex", draft.showCodex ?: global.showCodex) {
-            draft = draft.copy(showCodex = it); afterProviderChange()
+        val perLim = RadioButton(this).apply {
+            id = View.generateViewId()
+            text = "One row per limit — every ticked limit is its own row"
         }
-        col.addView(claudeBox)
-        col.addView(codexBox)
-
-        // --- one row per limit
-        col.addView(check("Each limit gets its own row", draft.perWindow ?: global.perWindow) {
-            draft = draft.copy(perWindow = it)
-            renderWindowToggles()
+        val rowGroup = RadioGroup(this).apply {
+            orientation = RadioGroup.VERTICAL
+            addView(perProv)
+            addView(perLim)
+        }
+        (if (draft.perWindow ?: global.perWindow) perLim else perProv).isChecked = true
+        rowGroup.setOnCheckedChangeListener { _, checkedId ->
+            draft = draft.copy(perWindow = checkedId == perLim.id)
             renderPreview()
-        })
-        col.addView(TextView(this).apply {
-            text = "On, a widget can show Claude's 5-hour and Claude's weekly as two separate rows. " +
-                "Off, each provider gets one row showing whichever of its limits is fullest."
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            alpha = .55f
-            setPadding(0, dp(2f), 0, 0)
-        })
-
-        // --- windows
-        windowBoxes = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        col.addView(windowBoxes)
-        renderWindowToggles()
+        }
+        col.addView(rowGroup)
 
         // --- appearance
         col.addView(heading("Details"))
@@ -272,159 +255,86 @@ class WidgetConfigActivity : AppCompatActivity() {
         return scroll
     }
 
-    /**
-     * Turning every provider off leaves nothing to draw, so the renderer falls back to the
-     * app-wide set. Saying so beats letting the preview quietly contradict the checkboxes.
-     */
-    private fun afterProviderChange() {
-        renderWindowToggles()
-        renderPreview()
+    /** What this widget currently resolves to, draft over global. */
+    private fun merged() = WidgetRenderer.optsFor(draft, global)
+
+    private fun note(s: String) = TextView(this).apply {
+        text = s
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        alpha = .55f
+        setPadding(0, dp(8f), 0, 0)
     }
 
+    /** The labels a provider is actually showing: none when it is off, else all minus hidden. */
+    private fun checkedLabels(state: ProviderState, shown: Boolean, hidden: Set<String>): Set<String> =
+        if (!shown) emptySet()
+        else state.windows.map { it.label }.filter { it !in hidden }.toSet()
+
     /**
-     * Builds the "this widget shows" list from the windows the account is really
-     * reporting, so it can never offer a limit that does not exist.
+     * One checkbox per limit either account reports, both providers in one list. Built
+     * from the live snapshot, so it can never offer a limit that does not exist — and a
+     * provider that has not signed in says so instead of silently having no entries.
      */
-    private fun renderFocusChoices() {
+    private fun renderLimitChecklist() {
+        limitList.removeAllViews()
         val snap = UsageRepo.load(this)
-        val choices = mutableListOf(
-            Focus("Everything") { c ->
-                c.copy(showClaude = null, showCodex = null, hiddenClaude = null, hiddenCodex = null)
+        val m = merged()
+
+        fun provider(name: String, isClaude: Boolean, state: ProviderState, shown: Boolean, hidden: Set<String>) {
+            if (!state.configured || state.windows.isEmpty()) {
+                limitList.addView(note("$name — sign in and refresh once, and its limits appear here"))
+                return
             }
-        )
-        fun addProvider(name: String, state: ProviderState, isClaude: Boolean) {
-            if (!state.configured || state.windows.isEmpty()) return
-            choices.add(
-                Focus("$name — all limits") { c ->
-                    if (isClaude) c.copy(showClaude = true, showCodex = false, hiddenClaude = emptySet())
-                    else c.copy(showClaude = false, showCodex = true, hiddenCodex = emptySet())
-                }
-            )
-            if (state.windows.size < 2) return
+            val checked = checkedLabels(state, shown, hidden)
             state.windows.forEach { win ->
-                // Everything except this one is hidden — that is what makes the widget
-                // about a single limit, and what makes its heading name that limit.
-                val others = state.windows.map { it.label }.filter { it != win.label }.toSet()
-                choices.add(
-                    Focus("$name · ${WidgetRenderer.windowName(win.label)}") { c ->
-                        if (isClaude) c.copy(showClaude = true, showCodex = false, hiddenClaude = others)
-                        else c.copy(showClaude = false, showCodex = true, hiddenCodex = others)
-                    }
-                )
-            }
-        }
-        addProvider("Claude", snap.claude, true)
-        addProvider("Codex", snap.codex, false)
-        focusChoices = choices
-
-        focusSpinner.adapter = ArrayAdapter(
-            this, android.R.layout.simple_spinner_dropdown_item, choices.map { it.label }
-        )
-        focusSpinner.setSelection(currentFocusIndex().coerceAtLeast(0))
-        var first = true
-        focusSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                if (first) { first = false; return }
-                draft = focusChoices[pos].apply(draft)
-                syncProviderBoxes()
-                renderWindowToggles()
-                renderPreview()
-            }
-            override fun onNothingSelected(p: AdapterView<*>?) {}
-        }
-    }
-
-    /** Which entry the draft currently matches, or 0 ("Everything") when it matches none. */
-    private fun currentFocusIndex(): Int {
-        val target = WidgetRenderer.optsFor(draft, global)
-        val snap = UsageRepo.load(this)
-        focusChoices.forEachIndexed { i, f ->
-            val opts = WidgetRenderer.optsFor(f.apply(WidgetConfig()), global)
-            if (i > 0 &&
-                opts.showClaude == target.showClaude &&
-                opts.showCodex == target.showCodex &&
-                opts.hiddenClaude == target.hiddenClaude &&
-                opts.hiddenCodex == target.hiddenCodex
-            ) return i
-        }
-        // Unused today beyond the guard above, but reading the snapshot keeps this honest
-        // if a provider stops reporting a window the draft still hides.
-        if (snap.claude.windows.isEmpty() && snap.codex.windows.isEmpty()) return 0
-        return 0
-    }
-
-    /** Keeps the provider checkboxes agreeing with a choice made in the spinner. */
-    private fun syncProviderBoxes() {
-        val opts = WidgetRenderer.optsFor(draft, global)
-        listOf(claudeBox to opts.showClaude, codexBox to opts.showCodex).forEach { (box, on) ->
-            box.setOnCheckedChangeListener(null)
-            box.isChecked = on
-            box.setOnCheckedChangeListener { _, v ->
-                draft = if (box === claudeBox) draft.copy(showClaude = v) else draft.copy(showCodex = v)
-                afterProviderChange()
-            }
-        }
-    }
-
-    private fun renderWindowToggles() {
-        windowBoxes.removeAllViews()
-        val snap = UsageRepo.load(this)
-        val opts = WidgetRenderer.optsFor(draft, global)
-        data class P(val name: String, val key: String, val state: ProviderState, val shown: Boolean)
-        val provs = listOf(
-            P("Claude", "cl", snap.claude, opts.showClaude),
-            P("Codex", "cx", snap.codex, opts.showCodex),
-        )
-        // The heading is unconditional. Hiding the whole section whenever there was nothing
-        // to tick made the feature invisible: a user who has not signed in, or whose first
-        // fetch has not landed, saw no sign that choosing between the 5-hour and the weekly
-        // limit was possible at all.
-        windowBoxes.addView(heading("Limit windows"))
-        windowBoxes.addView(TextView(this).apply {
-            text = "Show the 5-hour limit, the weekly one, or both — per provider, for this widget."
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            alpha = .55f
-            setPadding(0, 0, 0, dp(2f))
-        })
-
-        fun note(s: String) = windowBoxes.addView(TextView(this).apply {
-            text = s
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            alpha = .55f
-            setPadding(0, dp(8f), 0, 0)
-        })
-
-        val visible = provs.filter { it.shown }
-        if (visible.none { it.state.configured }) {
-            note("Sign in to a provider and refresh once — its windows appear here.")
-        } else if (visible.none { it.state.windows.size >= 2 }) {
-            note("Only one window is being reported right now, so there is nothing to choose yet.")
-        }
-
-        provs.forEach { p ->
-            // A single-window provider has no choice to offer; the notes above cover it.
-            if (!p.shown || !p.state.configured || p.state.windows.size < 2) return@forEach
-            windowBoxes.addView(TextView(this).apply {
-                text = p.name
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                alpha = .7f
-                setPadding(0, dp(8f), 0, 0)
-            })
-            val hidden = hiddenFor(p.key).toMutableSet()
-            p.state.windows.forEach { win ->
-                windowBoxes.addView(check(WidgetRenderer.windowName(win.label), win.label !in hidden) { on ->
-                    if (on) hidden.remove(win.label) else hidden.add(win.label)
-                    draft = if (p.key == "cl") draft.copy(hiddenClaude = hidden.toSet())
-                            else draft.copy(hiddenCodex = hidden.toSet())
-                    renderPreview()
+                val label = "$name · ${WidgetRenderer.windowName(win.label)}  —  ${win.pct}% used"
+                limitList.addView(check(label, win.label in checked) { on ->
+                    toggleLimit(isClaude, state, win.label, on)
                 })
             }
         }
+        provider("Claude", true, snap.claude, m.showClaude, m.hiddenClaude)
+        provider("Codex", false, snap.codex, m.showCodex, m.hiddenCodex)
     }
 
-    private fun hiddenFor(key: String): Set<String> =
-        if (key == "cl") draft.hiddenClaude ?: global.hiddenClaude
-        else draft.hiddenCodex ?: global.hiddenCodex
+    /**
+     * Rewrites the provider-visibility and hidden-window fields from one tick. The
+     * checklist is a VIEW over those fields, not a new kind of state: unticking every
+     * limit of a provider turns the provider off, ticking any turns it back on with
+     * exactly the ticked set visible.
+     */
+    private fun toggleLimit(isClaude: Boolean, state: ProviderState, label: String, on: Boolean) {
+        val m = merged()
+        val all = state.windows.map { it.label }.toSet()
+        val checked = checkedLabels(
+            state,
+            if (isClaude) m.showClaude else m.showCodex,
+            if (isClaude) m.hiddenClaude else m.hiddenCodex,
+        ).toMutableSet()
+        if (on) checked.add(label) else checked.remove(label)
+
+        if (checked.isEmpty()) {
+            // The last ticked limit overall cannot be unticked — a widget showing nothing
+            // is not a state worth supporting, and the renderer would fall back to the
+            // app defaults, which would contradict every box on this screen.
+            val snap = UsageRepo.load(this)
+            val otherHasAny = if (isClaude) {
+                checkedLabels(snap.codex, m.showCodex, m.hiddenCodex).isNotEmpty()
+            } else {
+                checkedLabels(snap.claude, m.showClaude, m.hiddenClaude).isNotEmpty()
+            }
+            if (!otherHasAny) {
+                android.widget.Toast.makeText(this, "A widget has to show at least one limit", android.widget.Toast.LENGTH_SHORT).show()
+                renderLimitChecklist()   // snap the box back on
+                return
+            }
+            draft = if (isClaude) draft.copy(showClaude = false) else draft.copy(showCodex = false)
+        } else {
+            draft = if (isClaude) draft.copy(showClaude = true, hiddenClaude = all - checked)
+                    else draft.copy(showCodex = true, hiddenCodex = all - checked)
+        }
+        renderPreview()
+    }
 
     private fun renderPreview() {
         val (w, h) = WidgetRenderer.sizeOf(this, widgetId)
@@ -466,11 +376,15 @@ class WidgetConfigActivity : AppCompatActivity() {
 
     private fun save() {
         WidgetConfigStore.save(this, widgetId, normalised())
-        WidgetRenderer.updateOne(this, widgetId)
+        // Nothing after the store may take the save down with it: the record is written,
+        // and redraw/scheduling are best-effort follow-ups, not conditions of it.
+        runCatching { WidgetRenderer.updateOne(this, widgetId) }
         // A widget added through a config activity may never see onUpdate, and that is the
         // only place the periodic refresh is scheduled. Both calls are idempotent.
-        RefreshWorker.schedulePeriodic(this)
-        if (RefreshWorker.isDue(this)) RefreshWorker.refreshNow(this)
+        runCatching {
+            RefreshWorker.schedulePeriodic(this)
+            if (RefreshWorker.isDue(this)) RefreshWorker.refreshNow(this)
+        }
         finishOk()
     }
 

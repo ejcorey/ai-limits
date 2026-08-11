@@ -52,25 +52,30 @@ projection it cannot support.
 Each limit can be its own widget, and every widget says which limit it is.
 
 Open a widget's settings — tap it under **Your widgets** in the app, or long-press it on
-the home screen (Android 12+) — and pick from **This widget shows**:
+the home screen (Android 12+) — and tick any combination in **Limits on this widget**:
 
-    Everything
-    Claude — all limits
-    Claude · 5-hour window
-    Claude · 7-day window
-    Claude · Opus · 7-day
-    Codex — all limits
-    Codex · 5-hour window
-    Codex · weekly window
+    [x] Claude · 5-hour window  —  68% used
+    [x] Claude · 7-day window   —  31% used
+    [ ] Claude · Opus · 7-day   —  12% used
+    [x] Codex · 5-hour window   —  41% used
+    [ ] Codex · 7-day window    —  22% used
 
-The list is built from the limits your account actually reports, so it can never offer one
-that does not exist. Pick a single limit and the widget's heading becomes **"Claude 5h"**
-rather than just "Claude" — which is what makes two widgets side by side readable, since
-"Claude 68%" next to "Claude 31%" tells you nothing about which limit either is.
+One flat checklist over every limit either account reports, with each limit's live
+percentage next to it — so Claude's 5-hour beside Claude's weekly beside one Codex limit
+is three ticks, and every other permutation is just as direct. The list is built from the
+limits your account actually reports, so it can never offer one that does not exist.
+Below it, **Rows** chooses whether the ticked limits collapse to one row per provider
+(the fullest leads) or each get a row of their own.
 
-Choosing a limit is a shortcut, not a separate mode: it writes the same provider and
-window fields the checkboxes below it do, so there is one source of truth for what a
-widget shows and no second code path that could disagree with the first.
+Unticking every limit of a provider turns that provider off for the widget; the last
+ticked limit overall refuses to be unticked, because a widget showing nothing is not a
+state worth supporting. A widget showing a single limit names it in its heading —
+**"Claude 5h"**, not "Claude" — which is what keeps two widgets side by side readable.
+
+This checklist replaced a preset-combinations dropdown plus separate provider and window
+sections. Those could express the same states, but only by composing three controls in
+different places — and the combination people actually wanted was exactly the one that
+took all three.
 
 ## Per-widget settings
 

@@ -67,6 +67,31 @@ class WidgetLogicTest {
         )
     }
 
+    // --- corner geometry ---------------------------------------------------
+    // The complaint these encode: text near a rounded corner read as cropped. The fix is
+    // a radius that stays modest on small widgets and an inset that clears the whole arc.
+
+    @Test
+    fun `the corner radius stays modest at every size`() {
+        // A 4x1 strip must not be half arc.
+        assertTrue(WidgetRenderer.cardRadius(250f, 40f) <= 40f * .15f)
+        // Large widgets cap absolutely rather than growing with the widget.
+        assertEquals(12f, WidgetRenderer.cardRadius(640f, 480f))
+        // And it never collapses to a square corner.
+        assertTrue(WidgetRenderer.cardRadius(56f, 36f) >= 5f)
+    }
+
+    @Test
+    fun `corner-band text is inset past the whole arc, not just past overlap`() {
+        for ((w, h) in listOf(90f to 36f, 264f to 160f, 640f to 480f, 120f to 40f)) {
+            val r = WidgetRenderer.cardRadius(w, h)
+            assertTrue(
+                "inset at ${w.toInt()}x${h.toInt()} must clear the radius",
+                WidgetRenderer.safeInset(w, h, 9f) >= r + 2f,
+            )
+        }
+    }
+
     @Test
     fun `window labels are spelled out`() {
         assertEquals("5-hour window", WidgetRenderer.windowName("5h"))

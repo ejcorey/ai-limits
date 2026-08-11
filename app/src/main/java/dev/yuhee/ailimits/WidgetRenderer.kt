@@ -367,6 +367,13 @@ object WidgetRenderer {
         // The stamp is now the sole "Open app" affordance, and it reaches every style
         // rather than only a tall Detail widget.
         val stamped = stampFits && drawStamp(pen, wDp, hDp, snap, t, o, refreshing)
+        // A hairline over the stamp, where there is room for structure: it turns the
+        // bottom band into a deliberate footer instead of two captions floating near
+        // the corners.
+        if (stamped && hDp >= 76f) {
+            val inset = safeInset(wDp, hDp, 11f)
+            pen.line(inset, hDp - stampH(hDp), wDp - inset * 2, t.rule)
+        }
         return bmp to stamped
     }
 
@@ -378,21 +385,26 @@ object WidgetRenderer {
      * was itself too soft. Scaled to the widget now, and capped well below the old value.
      */
     internal fun cardRadius(w: Float, h: Float): Float =
-        min(14f, min(w, h) * .16f).coerceAtLeast(7f)
+        min(12f, min(w, h) * .14f).coerceAtLeast(6f)
 
     /**
-     * Horizontal inset that clears the corner arc. Text placed at a flat padding sits
-     * inside the curve on a small widget, which is what made the corners look tight.
+     * Horizontal inset for anything drawn in the corner band — at least the full corner
+     * radius, plus clearance.
+     *
+     * The previous inset (`radius * .85`) technically cleared the arc, but "technically
+     * clear" is what made corner text look cropped: ink ending right where the curve
+     * begins reads as a collision even when no pixel overlaps. Insetting past the radius
+     * means text always starts on a flat edge.
      */
-    private fun safeInset(w: Float, h: Float, base: Float) =
-        max(base, cardRadius(w, h) * .85f)
+    internal fun safeInset(w: Float, h: Float, base: Float) =
+        max(base, cardRadius(w, h) + 2f)
 
     /**
      * Height reserved at the bottom for [drawStamp]. Thinner on short widgets, because
-     * "even when small" is the point of the stamp — a fixed 14dp band would have priced
-     * it out of exactly the sizes where a bare percentage is least informative.
+     * "even when small" is the point of the stamp — a fixed band would have priced it
+     * out of exactly the sizes where a bare percentage is least informative.
      */
-    private fun stampH(h: Float) = if (h < 64f) 11f else 14f
+    private fun stampH(h: Float) = if (h < 64f) 12f else 16f
 
     /**
      * How old the numbers are, as one short token: "now", "4m", "2h", "3d".
@@ -434,10 +446,13 @@ object WidgetRenderer {
         }.minOrNull()
 
         val tight = h < 64f
-        val pad = safeInset(w, h, if (tight) 8f else 10f)
+        val pad = safeInset(w, h, if (tight) 9f else 11f)
         val avail = w - pad * 2
         if (avail < 26f) return false
-        val baseY = h - (if (tight) 5f else 6.5f)
+        // Baseline lifted off the bottom edge: descenders used to reach within ~3dp of
+        // the border, which is inside the corner band and read as cropped even when the
+        // arc itself was cleared horizontally.
+        val baseY = h - (if (tight) 5.5f else 7.5f)
         val size = if (tight) 8.5f else 9.5f
 
         // Right: how old the data is. Drawn first because it is the half that must never
